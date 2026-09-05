@@ -1,7 +1,6 @@
 import * as db from "../shared/db.ts";
-import { hetzner } from "../shared/providers/index.ts";
-import type { VolumeInfo } from "../shared/providers/types.ts";
 import { isNotFoundError } from "../shared/providers/errors.ts";
+import { requireStorageDriver, type StorageVolume } from "./storage/index.ts";
 
 const AUTOMATION_ACTOR = "system:provisional-volume-sweeper";
 
@@ -25,6 +24,7 @@ function liveOwners(providerVolumeId: string): string[] {
  */
 export async function sweepExpiredProvisionalVolumes(): Promise<number> {
   const candidates = db.getExpiredProvisionalVolumes();
+  if (candidates.length === 0) return 0;
   let deleted = 0;
 
   for (const retired of candidates) {
@@ -34,9 +34,10 @@ export async function sweepExpiredProvisionalVolumes(): Promise<number> {
       continue;
     }
 
-    let volume: VolumeInfo | null = null;
+    const driver = requireStorageDriver(retired.driver_id);
+    let volume: StorageVolume | null = null;
     try {
-      volume = await hetzner.volumes.get(retired.provider_volume_id);
+      volume = await driver.inspect(retired.provider_volume_id);
     } catch (error) {
       if (!isNotFoundError(error)) {
         log(`inspect ${retired.provider_volume_id} failed: ${error}`);
@@ -44,14 +45,15 @@ export async function sweepExpiredProvisionalVolumes(): Promise<number> {
       }
     }
 
-    if (volume?.serverId) {
-      log(`skip ${retired.provider_volume_id}: provider reports it attached to server ${volume.serverId}`);
+    if (driver.portable && volume?.attachedServerId) {
+      log(`skip ${retired.provider_volume_id}: storage driver reports it attached to server ${volume.attachedServerId}`);
       continue;
     }
 
     const audit = db.beginVolumeDeletionAudit({
       actorUserId: AUTOMATION_ACTOR,
       providerVolumeId: retired.provider_volume_id,
+      driverId: retired.driver_id,
       providerVolumeName: volume?.name ?? "(already absent)",
       formerResourceType: retired.former_resource_type,
       formerResourceId: retired.former_resource_id,
@@ -62,7 +64,7 @@ export async function sweepExpiredProvisionalVolumes(): Promise<number> {
     });
 
     try {
-      if (volume) await hetzner.volumes.delete(retired.provider_volume_id);
+      if (volume) await driver.delete(retired.provider_volume_id);
       db.finishVolumeDeletionAudit(audit.id);
       db.deleteRetiredVolume(retired.provider_volume_id);
       deleted++;

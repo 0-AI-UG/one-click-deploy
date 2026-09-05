@@ -95,7 +95,7 @@ ${BOLD}Commands:${RESET}
   source                 Connect private Git checkout credentials
   resources              Inventory and estimated cost
   volumes                Manage attached and retained volumes
-  buckets                Manage Hetzner S3 buckets
+  buckets                Manage S3-compatible buckets
   gc [--server X]        Preview safe disk garbage collection (--execute to apply)
   ssh <app> <cmd>        Run a command in an app container
   ssh <app> -i           Interactive shell session

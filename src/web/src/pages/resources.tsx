@@ -174,7 +174,7 @@ export function ResourcesPage() {
   const handleCreateBucket = async () => {
     const name = bucketName.trim().toLowerCase();
     if (!name) return showToast("Enter a bucket name", "error");
-    if (!await confirm("Create S3 Bucket", `Create private bucket "${name}" in ${data?.s3_region || "the configured region"}? Hetzner billing starts when the first bucket becomes active.`, true)) return;
+    if (!await confirm("Create S3 Bucket", `Create private bucket "${name}" in ${data?.s3_region || "the configured region"}? Provider billing may apply.`, true)) return;
     setBucketBusy(`create:${name}`);
     try {
       await runConfirmedCliAction(
@@ -239,7 +239,7 @@ export function ResourcesPage() {
       {section === "overview" && data?.totals && (
         <Card className="p-4">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-1">Estimated Monthly Cost <InfoTip text="Estimates based on Hetzner's list prices. Excludes traffic overage and snapshots." /></h3>
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-1">Estimated Monthly Cost <InfoTip text="Estimates use the configured infrastructure provider's list prices. Excludes traffic overage and snapshots." /></h3>
             <span className="font-mono text-[9px] text-muted uppercase tracking-wider">
               gross · {data.totals.currency || "EUR"}
             </span>
@@ -270,7 +270,7 @@ export function ResourcesPage() {
               key: "object-storage" as const,
               label: "Object Storage",
               value: data?.s3_configured
-                ? `${data.buckets?.length || 0} buckets · Hetzner ${data.s3_region}`
+                ? `${data.buckets?.length || 0} buckets · ${data.s3_region}`
                 : "Not configured",
             },
             { key: "tools" as const, label: "Tools", value: "Build workers, server enrollment, and disk cleanup" },
@@ -342,7 +342,7 @@ export function ResourcesPage() {
                     {s.name}
                   </a>
                 </td>
-                <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.provider}</span></td>
+                <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.provider || "manual"}</span></td>
                 <td className="py-2 px-3 text-fg-dim">{s.ownership}</td>
                 <td className="py-2 px-3 text-fg-dim">{s.replica_count}</td>
                 <td className="py-2 px-3 font-mono text-[10px]">
@@ -387,10 +387,10 @@ export function ResourcesPage() {
         <div className="flex items-center gap-2 mb-3">
           <Cloud size={14} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">S3 Buckets ({data?.buckets?.length || 0})</h3>
-          {data?.s3_configured && <span className="font-mono text-[8px] text-muted uppercase">Hetzner · {data.s3_region}</span>}
+          {data?.s3_configured && <span className="font-mono text-[8px] text-muted uppercase">S3 · {data.s3_region}</span>}
         </div>
         {!data?.s3_configured ? (
-          <EmptyState message="Hetzner S3 is not configured. Add S3 credentials under Admin → Infrastructure." />
+          <EmptyState message="S3-compatible storage is not configured. Add and assign a provider under Admin → Providers." />
         ) : data.s3_error ? (
           <div className="border-2 border-accent-red bg-accent-red/10 p-3 font-mono text-[10px] text-accent-red">{data.s3_error}</div>
         ) : (

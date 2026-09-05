@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import * as db from "../shared/db.ts";
 import type { AppRow, ReplicaRow, ServerRow } from "../shared/db.ts";
-import { sshExec } from "./hetzner/ssh.ts";
+import { sshExec } from "../shared/remote/index.ts";
 
 export const REVISION_LABELS = {
   app: "ocd.app",

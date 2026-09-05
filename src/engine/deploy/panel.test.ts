@@ -13,7 +13,7 @@ describe("buildPanelReleaseScript", () => {
     image: "ghcr.io/0-ai-ug/open-cli-deployment@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     hostPort: 3001,
     containerPort: 3001,
-    privateIpv4: "10.0.0.2",
+    routingAddress: "10.0.0.2",
     envFilePath: "/home/deploy/apps/ocd-panel/.env.deploy",
     volumeFlag: "-v /mnt/data:/app/data",
     registryEnvPrefix: "DOCKER_CONFIG=/home/deploy/.docker-ocd-xyz ",
@@ -158,7 +158,7 @@ describe("buildPanelReleaseScript", () => {
   });
 
   test("omits the waker port when the private IP is unknown", () => {
-    const script = buildPanelReleaseScript({ ...base, privateIpv4: "" });
+    const script = buildPanelReleaseScript({ ...base, routingAddress: "" });
     expect(script).not.toContain(":8896:8896");
     // Still runs the panel on its loopback port.
     expect(script).toContain("-p 127.0.0.1:3001:3001");

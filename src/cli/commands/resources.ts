@@ -5,7 +5,7 @@ import { webConfirm } from "../confirm.ts";
 
 type ResourceServer = {
   id: number; name: string; provider_id: string; type: string; location: string;
-  provider: "hetzner" | "external"; ownership: "managed" | "connected";
+  provider: string; ownership: "managed" | "connected";
   status: string; replica_count: number; disk_free_gb: number | null;
   disk_total_gb: number | null; monthly_eur: number | null;
 };
@@ -80,7 +80,7 @@ async function listResources(): Promise<void> {
   );
   console.log(`\n${BOLD}S3 buckets${RESET}`);
   if (!data.s3_configured) {
-    console.log(`${DIM}Hetzner S3 is not configured. Add credentials in Admin → Infrastructure.${RESET}`);
+    console.log(`${DIM}S3-compatible storage is not configured. Add and assign a provider in Admin → Providers.${RESET}`);
   } else if (data.s3_error) {
     console.log(`${RED}${data.s3_error}${RESET}`);
   } else {
@@ -128,7 +128,7 @@ function bucketUsage(): void {
   console.error(`${BOLD}Usage:${RESET} ocd buckets <command>
 
 ${BOLD}Commands:${RESET}
-  list                      List buckets visible to the configured Hetzner S3 key
+  list                      List buckets visible to the configured S3 key
   create <name>             Create a private bucket (browser approval)
   delete <name>             Delete an empty bucket (browser approval)`);
 }
@@ -137,7 +137,7 @@ export async function buckets(args: string[] = []): Promise<void> {
   const sub = args[0] || "list";
   if (sub === "list" || sub === "ls") {
     const data = await inventory();
-    if (!data.s3_configured) throw new Error("Hetzner S3 is not configured");
+    if (!data.s3_configured) throw new Error("S3-compatible storage is not configured");
     if (data.s3_error) throw new Error(data.s3_error);
     table(
       ["NAME", "REGION", "CREATED", "ENDPOINT"],
@@ -327,7 +327,7 @@ ${BOLD}Commands:${RESET}
   ls                              Inventory and estimated monthly cost
   volume <provider-id>            Volume detail
   volumes <command>               Volume inspection, files, and deletion
-  buckets <command>               Hetzner S3 bucket management
+  buckets <command>               S3-compatible bucket management
   delete <server|volume> <id>     Delete a provider resource or disconnect an external server`);
 }
 

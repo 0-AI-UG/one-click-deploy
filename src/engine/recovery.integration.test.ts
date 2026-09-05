@@ -111,7 +111,7 @@ function seedReadyServer(): { id: number; ipv4: string } {
     type: "cx22",
     location: "fsn1",
     status: "ready",
-    private_ipv4: "10.0.0.2",
+    routing_address: "10.0.0.2",
   });
   // Mark older servers as provisioning so deploy.ts picks our fresh one.
   for (const other of db.getServers()) {

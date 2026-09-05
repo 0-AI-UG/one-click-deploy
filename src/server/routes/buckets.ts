@@ -5,14 +5,14 @@ import { handleError } from "../lib/utils.ts";
 import {
   createBucket,
   deleteBucket,
-  getHetznerS3Credentials,
-  HetznerS3Error,
+  getS3Credentials,
+  S3Error,
   listBuckets,
   validateBucketName,
-} from "../../engine/hetzner/s3.ts";
+} from "../../engine/object-storage/s3.ts";
 
 function providerError(error: unknown): Response {
-  if (error instanceof HetznerS3Error) {
+  if (error instanceof S3Error) {
     const status = error.code === "BucketAlreadyExists" || error.code === "BucketAlreadyOwnedByYou"
       ? 409
       : error.code === "NoSuchBucket"
@@ -30,7 +30,7 @@ function providerError(error: unknown): Response {
 export async function handleListBuckets(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
-    const credentials = await getHetznerS3Credentials();
+    const credentials = await getS3Credentials();
     if (!credentials) {
       return Response.json(
         { configured: false, buckets: [] },
@@ -54,10 +54,10 @@ export async function handleCreateBucket(request: Request): Promise<Response> {
     if (!checked.valid) {
       return Response.json({ error: checked.error }, { status: 400, headers: corsHeaders });
     }
-    const credentials = await getHetznerS3Credentials();
+    const credentials = await getS3Credentials();
     if (!credentials) {
       return Response.json(
-        { error: "Hetzner S3 is not configured. Add S3 credentials in Admin → Infrastructure." },
+        { error: "S3-compatible object storage is not configured. Add and assign a provider in Admin → Providers." },
         { status: 409, headers: corsHeaders },
       );
     }
@@ -79,9 +79,9 @@ export async function handleDeleteBucket(request: Request, rawName: string): Pro
     if (!checked.valid) {
       return Response.json({ error: checked.error }, { status: 400, headers: corsHeaders });
     }
-    const credentials = await getHetznerS3Credentials();
+    const credentials = await getS3Credentials();
     if (!credentials) {
-      return Response.json({ error: "Hetzner S3 is not configured" }, { status: 409, headers: corsHeaders });
+      return Response.json({ error: "S3-compatible object storage is not configured" }, { status: 409, headers: corsHeaders });
     }
     await enforceConfirmation(request, payload, "delete_bucket", "bucket", checked.value);
     await deleteBucket(checked.value, credentials);

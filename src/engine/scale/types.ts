@@ -65,11 +65,11 @@ export function appReplicaRunOpts(
  * unset so misconfigured servers fail fast at deploy time instead of
  * silently publishing to the public NIC.
  */
-export function replicaBindHost(server: { name: string; private_ipv4: string }): string {
-  if (!server.private_ipv4) {
+export function replicaBindHost(server: { name: string; routing_address: string }): string {
+  if (!server.routing_address) {
     throw new Error(
-      `Server ${server.name} has no private_ipv4 — wait for the network reconciler to attach it before deploying`,
+      `Server ${server.name} has no routing_address — wait for the network reconciler to attach it before deploying`,
     );
   }
-  return server.private_ipv4;
+  return server.routing_address;
 }

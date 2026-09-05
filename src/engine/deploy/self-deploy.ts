@@ -9,7 +9,7 @@
 //   1. Serialize the live bootstrap DB to a byte buffer.
 //   2. Clear the users table in the snapshot (the hosted instance's setup
 //      wizard will create the real admin on first visit).
-//   3. scp the snapshot + the SSH keypair onto the mounted Hetzner volume.
+//   3. scp the snapshot + the SSH keypair onto the selected storage volume.
 //
 // No secret re-encryption, no synthetic history seeding, no app-status
 // fixups — the panel table makes all of that unnecessary.
@@ -18,7 +18,7 @@ import { tmpdir } from "os";
 import { unlinkSync, writeFileSync } from "fs";
 import path from "path";
 import localDb from "../../shared/db.ts";
-import { sshExec, getSshKeyPath } from "../../shared/remote/index.ts";
+import { sshExec, getSshKeyPath, writeKnownHostsTmp } from "../../shared/remote/index.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [handoff:${context}]`, ...args);
@@ -60,13 +60,15 @@ export async function handoffDbToVolume(opts: {
   const snapshotPath = await buildSnapshot();
   const keyPath = getSshKeyPath();
   const pubKeyPath = keyPath + ".pub";
+  const knownHosts = writeKnownHostsTmp(opts.serverIp, opts.hostKey);
 
   async function scpTo(localPath: string, remotePath: string) {
     const proc = Bun.spawn(
       [
         "scp",
         "-i", keyPath,
-        "-o", "StrictHostKeyChecking=no",
+        "-o", `StrictHostKeyChecking=${knownHosts.strictHostKeyChecking}`,
+        "-o", `UserKnownHostsFile=${knownHosts.knownHostsFile}`,
         "-o", "ConnectTimeout=30",
         localPath,
         `root@${opts.serverIp}:${remotePath}`,
@@ -116,5 +118,6 @@ export async function handoffDbToVolume(opts: {
     log("done", `Handoff complete at ${opts.hostMountPath}`);
   } finally {
     try { unlinkSync(snapshotPath); } catch { /* file may already be gone */ }
+    if (knownHosts.tmpPath) try { unlinkSync(knownHosts.tmpPath); } catch { /* already gone */ }
   }
 }

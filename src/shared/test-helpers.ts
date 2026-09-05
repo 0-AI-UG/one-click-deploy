@@ -24,6 +24,19 @@ export function randomSuffix(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function configureTestInfrastructureProvider(kind = "hetzner", id = `${kind}-test`): string {
+  const { saveProviderAssignments, saveProviderConnections } = require("./provider-connections.ts");
+  saveProviderConnections([{
+    id,
+    kind,
+    name: kind === "hetzner" ? "Hetzner" : kind,
+    config: {},
+    created_at: "2026-01-01T00:00:00.000Z",
+  }]);
+  saveProviderAssignments({ infrastructure: id, object_storage: "" });
+  return id;
+}
+
 /** Route suites that stub out `requirePermission` still need the stubbed
  *  userId to resolve to a real admin row, because handlers now also call
  *  `hasPermission` directly to filter what a caller may see (stack member logs,
@@ -64,7 +77,7 @@ export function makeFakeComputeProvider(
       providerId: `h-${opts.name}-${Math.random()}`,
       ipv4: "10.0.0.1",
       ipv6: "",
-      privateIpv4: "",
+      routingAddress: "",
       status: "running",
     })),
     getServer: mock(async (id: string) => ({
@@ -88,7 +101,12 @@ export function makeFakeComputeProvider(
   const provider: Hetzner = {
     id: "hetzner",
     name: "Hetzner",
-    tokenKey: "hetzner_api_token",
+    capabilities: {
+      compute: true,
+      volumes: true,
+      privateNetwork: true,
+      firewall: true,
+    },
     validateToken: () => ({ valid: true, value: "x".repeat(40) }),
     verifyToken: async () => {},
     ensureSshKey: _mocks.ensureSshKey,

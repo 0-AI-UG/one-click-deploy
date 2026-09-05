@@ -63,7 +63,7 @@ export function traefikStaticConfig(): string {
     web: { address: ":80" },
     websecure: { address: ":443" },
     // Prometheus metrics for the reconciler's per-tick scrape. Bound like the
-    // other entrypoints, but the Hetzner cloud firewall only opens 22/80/443
+    // other entrypoints, but the managed-provider firewall only opens 22/80/443
     // publicly — same not-internet-reachable stance as the public pool blocks.
     metrics: { address: `:${TRAEFIK_METRICS_PORT}` },
   };

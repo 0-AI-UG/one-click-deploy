@@ -3,9 +3,9 @@ import { sshExec, ensureOcdNetwork, pullImmutableImage, startAppReplica } from "
 import { syncAppIngress } from "./traefik-manager.ts";
 import { scaleUp } from "./scale-up.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
-import { hetzner } from "../../shared/providers/index.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import { hashEnvironment, latestDesiredImage } from "../revision.ts";
+import { requireStorageDriver } from "../storage/index.ts";
 
 const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
@@ -15,7 +15,7 @@ const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
  * Stateless apps: scale up by 1 onto the target, then drain and remove the old replica
  * (zero downtime — net replica count stays the same).
  *
- * Apps with a persistent volume: stop on source, move the Hetzner volume to the target,
+ * Apps with a persistent volume: stop on source, move its portable volume to the target,
  * then start a fresh replica on the target. Brief downtime is unavoidable because a
  * volume can only be attached to one server at a time.
  */
@@ -66,19 +66,18 @@ export async function migrateReplica(
       const onTarget = allReplicas.filter((r) => r.server_id === targetServerId);
       if (onTarget.length > 0) {
         if (app.volume_id) {
-          const compute = hetzner;
-          if (compute.volumes) {
-            try {
-              const info = await compute.volumes.get(app.volume_id);
-              if (info.serverId !== targetServer.provider_id) {
+          const driver = requireStorageDriver(app.volume_driver);
+          try {
+              const info = await driver.inspect(app.volume_id, targetServer);
+              const expected = driver.portable ? targetServer.provider_id : String(targetServer.id);
+              if (info.attachedServerId !== expected) {
                 throw new Error(
-                  `Corrupted migration state: replica ${replicaId} is gone but volume is on ${info.serverId ?? "<detached>"}, not target ${targetServer.provider_id}`,
+                  `Corrupted migration state: replica ${replicaId} is gone but volume is on ${info.attachedServerId ?? "<detached>"}, not target ${expected}`,
                 );
               }
             } catch (err) {
               throw err instanceof Error ? err : new Error(String(err));
             }
-          }
         }
         const count = allReplicas.length;
         log("migrate", `Replica ${replicaId} already migrated to ${targetServer.name} on a prior attempt — returning success`);
@@ -214,15 +213,18 @@ async function migrateWithVolume(
   rollbackCtx?: VolumeMigrationContext,
   reservation?: { id: number; server_id: number; bind_address: string; host_port: number },
 ): Promise<MigrateResult> {
+  const driver = requireStorageDriver(app.volume_driver);
+  if (!driver.portable) {
+    throw new Error(`Volume ${app.volume_id} uses non-portable storage driver ${driver.id} and cannot move between servers`);
+  }
+  if (!driver.supports(sourceServer) || !driver.supports(targetServer)) {
+    throw new Error(`Storage driver ${driver.id} does not support both migration servers`);
+  }
   if (sourceServer.location !== targetServer.location) {
     throw new Error(
-      `Cannot migrate: volume lives in ${sourceServer.location}, target server is in ${targetServer.location}. Hetzner volumes are bound to a single location.`,
+      `Cannot migrate: volume lives in ${sourceServer.location}, target server is in ${targetServer.location}. The storage driver is bound to a single location.`,
     );
   }
-
-  const compute = hetzner;
-  if (!compute.volumes) throw new Error("Compute provider does not support volumes");
-  const volumeOps = compute.volumes;
 
   const sourceHostKey = sourceServer.ssh_host_key || undefined;
   const targetHostKey = targetServer.ssh_host_key || undefined;
@@ -234,8 +236,8 @@ async function migrateWithVolume(
   // On a retry where the volume is already on target, app.volume_mount has
   // likely already been rewritten to the canonical post-migration form, so we
   // can't safely restore it on rollback.
-  const volumeInfoAtStart = await volumeOps.get(volumeId);
-  const volumeAlreadyOnTarget = volumeInfoAtStart.serverId === targetServer.provider_id;
+  const volumeInfoAtStart = await driver.inspect(volumeId, sourceServer);
+  const volumeAlreadyOnTarget = volumeInfoAtStart.attachedServerId === targetServer.provider_id;
 
   if (rollbackCtx) {
     rollbackCtx.withVolume = true;
@@ -277,8 +279,8 @@ async function migrateWithVolume(
   if (rollbackCtx) rollbackCtx.sourceContainerDestroyed = true;
 
   // Phase B — Move volume from source to target. Branch on observed attachment.
-  const onSource = volumeInfoAtStart.serverId === sourceServer.provider_id;
-  const detached = volumeInfoAtStart.serverId === null;
+  const onSource = volumeInfoAtStart.attachedServerId === sourceServer.provider_id;
+  const detached = volumeInfoAtStart.attachedServerId === null;
 
   if (volumeAlreadyOnTarget) {
     log("migrate", `Volume ${volumeId} already on target ${targetServer.name} — skipping detach/attach`);
@@ -288,21 +290,20 @@ async function migrateWithVolume(
     }
   } else if (onSource || detached) {
     if (onSource) {
-      // Tear down the source bind mount (if any) before Hetzner pulls the
+      // Tear down the source bind mount (if any) before the provider pulls the
       // device — otherwise we leave a dangling bind on the source server.
       try {
-        const { removeVolumeBindMount } = await import("../hetzner/host-mounts.ts");
-        await removeVolumeBindMount({
-          serverIp: sourceServer.ipv4,
-          hostKey: sourceHostKey,
-          hostMountPath: `/mnt/ocd-${app.name}-data`,
+        await driver.removeMount({
+          server: sourceServer,
+          volumeId,
+          hostPath: `/mnt/ocd-${app.name}-data`,
           blockName: `app-${app.id}`,
         });
       } catch (err) {
         log("migrate", `removeVolumeBindMount on source failed (continuing): ${err}`);
       }
       emit("migrate", `Detaching volume from ${sourceServer.name}...`);
-      await volumeOps.detach(volumeId);
+      await driver.detach(volumeId, sourceServer);
       if (rollbackCtx) rollbackCtx.volumeDetachedFromSource = true;
     } else {
       // Mid-flight from a prior crash: already detached. Mark so rollback knows.
@@ -311,12 +312,12 @@ async function migrateWithVolume(
 
     emit("migrate", `Attaching volume to ${targetServer.name}...`);
     try {
-      await volumeOps.attach(volumeId, targetServer.provider_id);
+      await driver.attach(volumeId, targetServer);
       if (rollbackCtx) rollbackCtx.volumeAttachedToTarget = true;
     } catch (attachErr) {
       log("migrate", `Attach to target failed, attempting rollback to source: ${attachErr}`);
       try {
-        await volumeOps.attach(volumeId, sourceServer.provider_id);
+        await driver.attach(volumeId, sourceServer);
         if (rollbackCtx) rollbackCtx.volumeDetachedFromSource = false;
         log("migrate", `Volume rolled back to source ${sourceServer.name}`);
       } catch (rollbackErr) {
@@ -326,7 +327,7 @@ async function migrateWithVolume(
     }
   } else {
     throw new Error(
-      `Volume ${volumeId} attached to unexpected server '${volumeInfoAtStart.serverId}' (expected source '${sourceServer.provider_id}' or target '${targetServer.provider_id}')`,
+      `Volume ${volumeId} attached to unexpected server '${volumeInfoAtStart.attachedServerId}' (expected source '${sourceServer.provider_id}' or target '${targetServer.provider_id}')`,
     );
   }
 
@@ -334,17 +335,13 @@ async function migrateWithVolume(
   // handleReattachVolume in src/server/routes/volumes.ts.
   const hostMountPath = `/mnt/ocd-${app.name}-data`;
   {
-    const { ensureVolumeBindMount } = await import("../hetzner/host-mounts.ts");
-    // Allow automount to settle after attach.
-    await Bun.sleep(3000);
     let lastErr: unknown = null;
     for (let i = 0; i < 5; i++) {
       try {
-        await ensureVolumeBindMount({
-          serverIp: targetServer.ipv4,
-          hostKey: targetHostKey,
-          hetznerVolumeId: volumeId,
-          hostMountPath,
+        await driver.ensureMount({
+          server: targetServer,
+          volumeId,
+          hostPath: hostMountPath,
           blockName: `app-${app.id}`,
         });
         lastErr = null;
@@ -362,7 +359,7 @@ async function migrateWithVolume(
   const containerPath = (app.volume_mount?.split(":")[1]) || "/data";
   const newVolumeMount = `${hostMountPath}:${containerPath}`;
   if (newVolumeMount !== app.volume_mount) {
-    db.updateAppVolume(app.id, volumeId, newVolumeMount, !!app.volume_attached);
+    db.updateAppVolume(app.id, volumeId, newVolumeMount, !!app.volume_attached, app.volume_driver);
     app.volume_mount = newVolumeMount;
     if (rollbackCtx) rollbackCtx.volumeMountChanged = true;
   }
@@ -440,7 +437,7 @@ export async function rollbackMigrateWithVolume(
   // 1. Restore volume_mount in DB if we mutated it.
   if (rb.volumeMountChanged && rb.originalVolumeMount !== undefined) {
     try {
-      db.updateAppVolume(app.id, app.volume_id, rb.originalVolumeMount, !!app.volume_attached);
+      db.updateAppVolume(app.id, app.volume_id, rb.originalVolumeMount, !!app.volume_attached, app.volume_driver);
       logLine(`Restored app.volume_mount to '${rb.originalVolumeMount}'`);
     } catch (err) {
       logLine(`MANUAL RECOVERY NEEDED: could not restore volume_mount: ${err}`);
@@ -450,25 +447,21 @@ export async function rollbackMigrateWithVolume(
   // 2. Move the volume back to source if it's on target.
   if (rb.volumeAttachedToTarget || rb.volumeDetachedFromSource) {
     try {
-      const compute = hetzner;
-      if (!compute.volumes) {
-        logLine(`MANUAL RECOVERY NEEDED: provider has no volumes API — volume may be on ${targetServer.name}`);
-      } else {
+      const driver = requireStorageDriver(app.volume_driver);
         if (rb.volumeAttachedToTarget) {
           try {
-            await compute.volumes.detach(app.volume_id);
+            await driver.detach(app.volume_id, targetServer);
             logLine(`Detached volume from target ${targetServer.name}`);
           } catch (err) {
             logLine(`MANUAL RECOVERY NEEDED: failed to detach volume from target: ${err}`);
           }
         }
         try {
-          await compute.volumes.attach(app.volume_id, sourceServer.provider_id);
+          await driver.attach(app.volume_id, sourceServer);
           logLine(`Re-attached volume to source ${sourceServer.name}`);
         } catch (err) {
           logLine(`MANUAL RECOVERY NEEDED: failed to re-attach volume to source: ${err}`);
         }
-      }
     } catch (err) {
       logLine(`MANUAL RECOVERY NEEDED: volume rollback threw: ${err}`);
     }

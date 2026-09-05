@@ -1,5 +1,5 @@
 import * as db from "../shared/db.ts";
-import { hetzner } from "../shared/providers/index.ts";
+import { requireDefaultInfrastructureProvider } from "../shared/infrastructure.ts";
 import { getOrCreateLocalKeyPair, waitForServer, captureHostKey, ensureHostLogPolicy } from "../shared/remote/index.ts";
 import { sshExec } from "../shared/remote/index.ts";
 import { ensureNetwork as ensureSharedNetwork } from "./network.ts";
@@ -28,7 +28,6 @@ export async function provisionServer(opts: {
   emit: ProgressFn;
 }): Promise<Server> {
   const { serverType, location, emit } = opts;
-  const compute = hetzner;
   const serverName = opts.name || `ocd-server-${Date.now()}`;
 
   if (!opts.approved) {
@@ -36,6 +35,8 @@ export async function provisionServer(opts: {
       "Automatic server creation requires browser approval. Run `ocd servers create` and approve the capacity in the web UI.",
     );
   }
+
+  const compute = requireDefaultInfrastructureProvider(db.getSettings());
 
   const existingRow = db.getServers().find((server) => server.name === serverName);
   if (existingRow) {
@@ -61,7 +62,7 @@ export async function provisionServer(opts: {
   const [sshKey, firewallId, networkId] = await Promise.all([
     compute.ensureSshKey("open-cli-deployment", publicKey),
     compute.ensureFirewall(),
-    ensureSharedNetwork(),
+    ensureSharedNetwork(compute),
   ]);
   log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}, network: ${networkId || "(none)"}`);
   emit("server", "SSH key + firewall + network ready");
@@ -78,7 +79,7 @@ export async function provisionServer(opts: {
       location,
       status: "creating",
       pool: opts.pool ?? "general",
-      provider: "hetzner",
+      provider: compute.id,
       ownership: "managed",
     });
 
@@ -119,7 +120,7 @@ export async function provisionServer(opts: {
         networkId: networkId || undefined,
         userData: "",
       });
-      log("server", `Server created in ${Date.now() - createStart}ms: id=${providerServer.providerId} private=${providerServer.privateIpv4 || "(none)"}`);
+      log("server", `Server created in ${Date.now() - createStart}ms: id=${providerServer.providerId} private=${providerServer.routingAddress || "(none)"}`);
     }
   }
 
@@ -129,7 +130,7 @@ export async function provisionServer(opts: {
     provider_id: providerServer.providerId,
     ipv4: serverIp,
     ipv6: providerServer.ipv6 || "",
-    private_ipv4: providerServer.privateIpv4 || "",
+    routing_address: providerServer.routingAddress || "",
     status: "provisioning",
     management_address: serverIp,
   });

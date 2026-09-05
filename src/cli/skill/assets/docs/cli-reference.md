@@ -90,7 +90,7 @@ ocd servers show <name|id>
 ocd servers diagnose <name|id>
 ocd servers create --type=X --location=X
 ocd servers enrollment-key
-ocd servers connect --name=X --address=X --private-address=X --host-key='...'
+ocd servers connect --name=X --address=X --routing-address=X --host-key='...'
 ocd servers delete <name|id>
 ocd servers refresh
 ocd servers pool <name|id> <pool>
@@ -113,6 +113,6 @@ Remote-to-local copies only are supported.
 DNS has no mutation command. The panel displays records for the operator to
 create at any DNS provider.
 
-Hetzner buckets use a separately configured S3 access key, secret key, and
-location-bound endpoint. Bucket creation and deletion require browser approval;
+Buckets use a separately configured S3 access key, secret key, signing region,
+and HTTPS endpoint. Bucket creation and deletion require browser approval;
 deletion refuses non-empty buckets and never recursively removes objects.

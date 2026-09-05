@@ -8,10 +8,10 @@ interface Server {
   id: number;
   name: string;
   provider_id: string;
-  provider?: "hetzner" | "external";
+  provider?: string;
   ownership?: "managed" | "connected";
   management_address?: string;
-  private_ipv4?: string;
+  routing_address?: string;
   ipv4: string;
   type: string;
   location: string;
@@ -39,7 +39,7 @@ interface HostProbe {
 interface ServerDetail extends Server {
   status: string;
   ipv6: string;
-  private_ipv4: string;
+  routing_address: string;
   created_at: string;
   monthly_eur: number | null;
   currency: string;
@@ -83,7 +83,7 @@ async function listServers(): Promise<void> {
       String(s.id),
       s.name,
       s.ipv4,
-      s.provider || "external",
+      s.provider || "manual",
       s.ownership || "connected",
       s.pool || "general",
       s.apps?.map((a) => a.name).join(", ") || "-",
@@ -123,8 +123,8 @@ async function showServer(ref: string, diagnosticsOnly = false): Promise<void> {
   const detail = await get<ServerDetail>(`/api/resources/servers/${server.id}`);
   const host = detail.host;
   console.log(`${BOLD}${detail.name}${RESET}  ${colorStatus(detail.status)}  ${DIM}#${detail.id}${RESET}`);
-  console.log(`${DIM}Provider:${RESET} ${detail.provider || "external"}${detail.provider_id ? ` (${detail.provider_id})` : ""}  ${DIM}Ownership:${RESET} ${detail.ownership || "connected"}  ${DIM}Pool:${RESET} ${detail.pool || "general"}`);
-  console.log(`${DIM}Network:${RESET} ${detail.ipv4}${detail.private_ipv4 ? ` / ${detail.private_ipv4}` : ""}`);
+  console.log(`${DIM}Provider:${RESET} ${detail.provider || "manual"}${detail.provider_id ? ` (${detail.provider_id})` : ""}  ${DIM}Ownership:${RESET} ${detail.ownership || "connected"}  ${DIM}Pool:${RESET} ${detail.pool || "general"}`);
+  console.log(`${DIM}Network:${RESET} ${detail.ipv4}${detail.routing_address ? ` / ${detail.routing_address}` : ""}`);
   console.log(`${DIM}Usage:${RESET} CPU ${fmtPct(detail.cpu_percent)}  memory ${fmtPct(detail.memory_percent)}  disk ${detail.disk_free_gb ?? "-"}/${detail.disk_total_gb ?? "-"} GB free`);
   console.log(`${DIM}Cost:${RESET} ${detail.monthly_eur == null ? "-" : `${detail.currency} ${detail.monthly_eur.toFixed(2)}/month`}`);
 
@@ -216,21 +216,21 @@ async function printEnrollmentKey(): Promise<void> {
 async function connectServer(args: string[]): Promise<void> {
   const name = valueFlag(args, "name");
   const managementAddress = valueFlag(args, "address");
-  const privateIpv4 = valueFlag(args, "private-address");
+  const routingAddress = valueFlag(args, "routing-address");
   const sshHostKey = valueFlag(args, "host-key");
-  if (!name || !managementAddress || !privateIpv4 || !sshHostKey) {
-    throw new Error("Usage: ocd servers connect --name=X --address=X --private-address=X --host-key='X ssh-ed25519 AAAA...' [--pool=general]");
+  if (!name || !managementAddress || !routingAddress || !sshHostKey) {
+    throw new Error("Usage: ocd servers connect --name=X --address=X --routing-address=X --host-key='X ssh-ed25519 AAAA...' [--pool=general]");
   }
   const result = await post<{ server: Server }>("/api/servers/connect", {
     name,
     management_address: managementAddress,
-    private_ipv4: privateIpv4,
+    routing_address: routingAddress,
     ssh_host_key: sshHostKey,
     ssh_user: valueFlag(args, "ssh-user") || "root",
     ssh_port: Number(valueFlag(args, "ssh-port") || "22"),
     pool: valueFlag(args, "pool") || "general",
   });
-  console.log(`${GREEN}Connected ${result.server.name} as an externally owned stateless host.${RESET}`);
+  console.log(`${GREEN}Connected ${result.server.name} as an externally owned host.${RESET}`);
 }
 
 async function setPool(ref: string, pool: string): Promise<void> {
@@ -271,7 +271,7 @@ ${BOLD}Commands:${RESET}
   diagnose <name|id>              Host diagnostics
   create --type=X --location=X    Provision a server
   enrollment-key                  Print the public key to install on an external host
-  connect --name=X --address=X --private-address=X --host-key='...'  Connect an existing stateless host
+  connect --name=X --address=X --routing-address=X --host-key='...'  Connect an existing host
   delete <name|id>                Destroy a managed host or disconnect an external host
   refresh                         Refresh provider-backed server inventory
   pool <name|id> <pool>           Change future-placement capacity pool

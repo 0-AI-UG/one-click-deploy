@@ -4,7 +4,6 @@ useTempDataDir();
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
 const compute = makeFakeComputeProvider();
-(compute as any).id = "test-cloud";
 mock.module("../../shared/providers/index.ts", () => ({ hetzner: compute }));
 
 const recreateAppContainer = mock(async () => ({ ok: true } as { ok: boolean; error?: string }));
@@ -30,6 +29,7 @@ resizeVolume.mockImplementation(async (_id: string, size: number) => {
 });
 
 import * as db from "../../shared/db.ts";
+import { __replaceInfrastructureProvidersForTest } from "../../shared/providers/registry.ts";
 import detachVolumeOp from "./detach-volume.ts";
 import resizeVolumeOp from "./resize-volume.ts";
 
@@ -53,18 +53,19 @@ function stepByName(op: { steps: any[] }, name: string) {
 function makeAppWithVolume(volumeId: string | null) {
   const server = db.insertServer({
     name: `srv-${randomSuffix()}`, provider_id: `h-${randomSuffix()}`, ipv4: "2.2.2.2", ipv6: "",
-    type: "cx22", location: "fsn1", status: "ready",
+    type: "cx22", location: "fsn1", status: "ready", provider: "hetzner", ownership: "managed",
   });
   const name = `dv-${randomSuffix()}`;
   const { app } = db.insertAppWithFirstReplica(
     { name, domain: `${name}.example.com`, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", container_port: 3000, env_vars: "{}" },
     server.id,
   );
-  if (volumeId) db.updateAppVolume(app.id, volumeId, `/mnt/ocd-${name}-data:/data`);
+  if (volumeId) db.updateAppVolume(app.id, volumeId, `/mnt/ocd-${name}-data:/data`, false, "hetzner-block");
   return { server, app: db.getApp(app.id)! };
 }
 
 beforeEach(() => {
+  __replaceInfrastructureProvidersForTest([compute]);
   observedVolumeSize = 10;
   observedVolumeServerId = null;
   compute._mocks.volumeDetach.mockClear();
@@ -117,7 +118,8 @@ describe("detach_volume", () => {
 
 describe("resize_volume", () => {
   test("resizes the volume and has no compensation", async () => {
-    const { ctx } = makeCtx({ volumeId: "v-3", sizeGb: 50 });
+    const { server } = makeAppWithVolume("v-3");
+    const { ctx } = makeCtx({ volumeId: "v-3", sizeGb: 50, driverId: "hetzner-block", serverId: server.id });
     await stepByName(resizeVolumeOp, "resize_volume").run(ctx, {});
     expect(resizeVolume).toHaveBeenCalledWith("v-3", 50);
     expect(resizeVolumeOp.resourceKeys({ volumeId: "v-3", sizeGb: 50 })).toEqual(["volume:v-3"]);

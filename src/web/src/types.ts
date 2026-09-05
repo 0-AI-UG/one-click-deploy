@@ -198,10 +198,10 @@ export type ResourceServer = {
   replica_count: number;
   monthly_eur?: number;
   provider_id: string;
-  provider: "hetzner" | "external";
+  provider: string;
   ownership: "managed" | "connected";
   management_address: string;
-  private_ipv4: string;
+  routing_address: string;
   ssh_user: string;
   ssh_port: number;
 };

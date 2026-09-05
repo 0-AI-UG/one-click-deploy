@@ -1,6 +1,6 @@
 import * as db from "../../shared/db.ts";
-import { hetzner } from "../../shared/providers/index.ts";
 import { recreateAppContainer } from "../deploy/index.ts";
+import { defaultStorageDriverForServer, requireStorageDriver } from "../storage/index.ts";
 import { registerOp } from "./registry.ts";
 import {
   loadSingleReplicaTarget,
@@ -10,19 +10,20 @@ import {
 } from "./_volumes.ts";
 import { FatalProbeError, type OpKindDefinition, type Step } from "../types.ts";
 
-// Attach an EXISTING Hetzner volume to the app's single replica. Same shape as
+// Attach an existing storage volume to the app's single replica. Same shape as
 // attach_volume, but the volume step ATTACHES rather than creates (so its
 // compensation DETACHES rather than deletes — we never destroy a pre-existing
 // volume). The location precheck lives in validation.
 
-type AttachExistingVolumeInput = { appId: number; volumeId: string; mountPath?: string };
+type AttachExistingVolumeInput = { appId: number; volumeId: string; mountPath?: string; driverId?: string };
 
-type ValidateOut = SingleReplicaTarget & { priorMinReplicas: number; priorMaxReplicas: number };
+type ValidateOut = SingleReplicaTarget & {
+  priorMinReplicas: number;
+  priorMaxReplicas: number;
+  driverId: string;
+  hostMountPath: string;
+};
 type AttachToAppOut = { priorMinReplicas: number; priorMaxReplicas: number; volumeMount: string };
-
-function hostMountPathFor(volumeId: string): string {
-  return `/mnt/vol-${volumeId}`;
-}
 
 const validate: Step<AttachExistingVolumeInput, ValidateOut> = {
   name: "validate",
@@ -30,14 +31,22 @@ const validate: Step<AttachExistingVolumeInput, ValidateOut> = {
   async run(ctx) {
     const target = loadSingleReplicaTarget(ctx.input.appId, { requireNoVolume: true });
     const app = db.getApp(ctx.input.appId)!;
-    const volInfo = await hetzner.volumes.get(ctx.input.volumeId);
-    if (volInfo.location && volInfo.location !== target.serverLocation) {
+    const server = db.getServer(target.serverId)!;
+    const retired = db.getRetiredVolumes().find((v) => v.provider_volume_id === ctx.input.volumeId);
+    const driver = requireStorageDriver(
+      ctx.input.driverId || retired?.driver_id || defaultStorageDriverForServer(server).id,
+    );
+    if (!driver.supports(server)) throw new Error(`Storage driver ${driver.id} does not support server ${server.name}`);
+    const volInfo = await driver.inspect(ctx.input.volumeId, server);
+    if (driver.portable && volInfo.location && volInfo.location !== target.serverLocation) {
       throw new Error(
         `Cannot attach: volume is in ${volInfo.location} but server is in ${target.serverLocation}`,
       );
     }
     return {
       ...target,
+      driverId: driver.id,
+      hostMountPath: volInfo.hostPath,
       priorMinReplicas: app.min_replicas,
       priorMaxReplicas: app.max_replicas,
     };
@@ -49,15 +58,18 @@ const attachVolume: Step<AttachExistingVolumeInput, { hostMountPath: string }> =
   label: "Attach volume to server",
   async probe(ctx, prior) {
     const target = prior["validate"] as ValidateOut;
+    const server = db.getServer(target.serverId);
+    if (!server) throw new FatalProbeError("Server disappeared while attaching volume");
+    const driver = requireStorageDriver(target.driverId);
     try {
-      const info = await hetzner.volumes.get(ctx.input.volumeId);
-      if (info.serverId === target.providerServerId) {
+      const info = await driver.inspect(ctx.input.volumeId, server);
+      if (info.attachedServerId === target.providerServerId || info.attachedServerId === String(target.serverId)) {
         ctx.log(`volume ${ctx.input.volumeId} already attached to server ${target.providerServerId}`);
-        return { hostMountPath: hostMountPathFor(ctx.input.volumeId) };
+        return { hostMountPath: target.hostMountPath };
       }
-      if (info.serverId != null) {
+      if (info.attachedServerId != null) {
         throw new FatalProbeError(
-          `Volume ${ctx.input.volumeId} is attached to unexpected server ${info.serverId}; refusing to move it implicitly`,
+          `Volume ${ctx.input.volumeId} is attached to unexpected server ${info.attachedServerId}; refusing to move it implicitly`,
         );
       }
     } catch (error) {
@@ -71,10 +83,13 @@ const attachVolume: Step<AttachExistingVolumeInput, { hostMountPath: string }> =
   },
   async run(ctx, prior) {
     const target = prior["validate"] as ValidateOut;
+    const server = db.getServer(target.serverId);
+    if (!server) throw new Error("Server not found");
+    const driver = requireStorageDriver(target.driverId);
     try {
-      await hetzner.volumes.attach(ctx.input.volumeId, target.providerServerId);
-      const confirmed = await hetzner.volumes.get(ctx.input.volumeId);
-      if (confirmed.serverId !== target.providerServerId) {
+      await driver.attach(ctx.input.volumeId, server);
+      const confirmed = await driver.inspect(ctx.input.volumeId, server);
+      if (confirmed.attachedServerId !== target.providerServerId && confirmed.attachedServerId !== String(target.serverId)) {
         throw new Error(
           `Provider did not confirm volume ${ctx.input.volumeId} on server ${target.providerServerId}`,
         );
@@ -84,9 +99,9 @@ const attachVolume: Step<AttachExistingVolumeInput, { hostMountPath: string }> =
       // pre-step detached state inline if attach may have succeeded before a
       // failed confirmation request.
       try {
-        const state = await hetzner.volumes.get(ctx.input.volumeId);
-        if (state.serverId === target.providerServerId) {
-          await hetzner.volumes.detach(ctx.input.volumeId);
+        const state = await driver.inspect(ctx.input.volumeId, server);
+        if (state.attachedServerId === target.providerServerId || state.attachedServerId === String(target.serverId)) {
+          await driver.detach(ctx.input.volumeId, server);
         }
       } catch (rollbackError) {
         throw new Error(
@@ -96,23 +111,28 @@ const attachVolume: Step<AttachExistingVolumeInput, { hostMountPath: string }> =
       }
       throw error;
     }
-    return { hostMountPath: hostMountPathFor(ctx.input.volumeId) };
+    return { hostMountPath: target.hostMountPath };
   },
-  async compensate(ctx) {
+  async compensate(ctx, _out, prior) {
     // probeCompensated already short-circuits when the volume is no longer on
     // the target server, so if we reach here the volume really is still
     // attached and must come off. Do NOT swallow a detach failure: leaving a
     // pre-existing volume stranded on the wrong server behind a clean
     // `compensated` is a silent inconsistency — let it propagate to
     // `compensation_failed` instead.
-    await hetzner.volumes.detach(ctx.input.volumeId);
+    const target = prior["validate"] as ValidateOut;
+    const server = db.getServer(target.serverId);
+    await requireStorageDriver(target.driverId).detach(ctx.input.volumeId, server ?? undefined);
     ctx.log(`Detached volume ${ctx.input.volumeId}`);
   },
   async probeCompensated(ctx, _out, prior) {
     const target = prior["validate"] as ValidateOut | undefined;
+    if (!target) return false;
+    const server = db.getServer(target.serverId);
+    if (!server) return false;
     try {
-      const info = await hetzner.volumes.get(ctx.input.volumeId);
-      return info.serverId !== (target?.providerServerId ?? null);
+      const info = await requireStorageDriver(target.driverId).inspect(ctx.input.volumeId, server);
+      return info.attachedServerId !== target.providerServerId && info.attachedServerId !== String(target.serverId);
     } catch {
       return false;
     }
@@ -125,10 +145,10 @@ const bindMount: Step<AttachExistingVolumeInput, { ok: true }> = {
   async run(ctx, prior) {
     const target = prior["validate"] as ValidateOut;
     await ensureBindMount({
-      serverIp: target.serverIp,
-      hostKey: target.hostKey,
+      serverId: target.serverId,
+      driverId: target.driverId,
       volumeId: ctx.input.volumeId,
-      hostMountPath: hostMountPathFor(ctx.input.volumeId),
+      hostMountPath: target.hostMountPath,
       appId: ctx.input.appId,
     });
     return { ok: true };
@@ -137,9 +157,10 @@ const bindMount: Step<AttachExistingVolumeInput, { ok: true }> = {
     const target = prior["validate"] as ValidateOut | undefined;
     if (!target) return;
     await removeBindMountBestEffort({
-      serverIp: target.serverIp,
-      hostKey: target.hostKey,
-      hostMountPath: hostMountPathFor(ctx.input.volumeId),
+      serverId: target.serverId,
+      driverId: target.driverId,
+      volumeId: ctx.input.volumeId,
+      hostMountPath: target.hostMountPath,
       appId: ctx.input.appId,
     });
   },
@@ -152,7 +173,7 @@ const attachToApp: Step<AttachExistingVolumeInput, AttachToAppOut> = {
     const before = prior["validate"] as ValidateOut;
     const app = db.getApp(ctx.input.appId);
     if (!app) throw new FatalProbeError("App disappeared while recording its volume");
-    const volumeMount = `${hostMountPathFor(ctx.input.volumeId)}:${ctx.input.mountPath || "/data"}`;
+    const volumeMount = `${before.hostMountPath}:${ctx.input.mountPath || "/data"}`;
     if (app.volume_id && app.volume_id !== ctx.input.volumeId) {
       throw new FatalProbeError(
         `App already references unexpected volume ${app.volume_id}; refusing to overwrite it with ${ctx.input.volumeId}`,
@@ -178,12 +199,12 @@ const attachToApp: Step<AttachExistingVolumeInput, AttachToAppOut> = {
     const app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App not found");
     const containerPath = ctx.input.mountPath || "/data";
-    const volumeMount = `${hostMountPathFor(ctx.input.volumeId)}:${containerPath}`;
+    const volumeMount = `${before.hostMountPath}:${containerPath}`;
     const priorMinReplicas = before?.priorMinReplicas ?? app.min_replicas;
     const priorMaxReplicas = before?.priorMaxReplicas ?? app.max_replicas;
     // attached=true: this is a pre-existing volume, so destroy must DETACH it,
     // never delete it (deleting would be data loss on a volume we don't own).
-    db.updateAppVolume(ctx.input.appId, ctx.input.volumeId, volumeMount, true);
+    db.updateAppVolume(ctx.input.appId, ctx.input.volumeId, volumeMount, true, before.driverId);
     db.deleteRetiredVolume(ctx.input.volumeId);
     // A volume locks the app to a single server: force min/max replicas to 1.
     db.updateAppScaling(ctx.input.appId, { min_replicas: Math.min(1, app.min_replicas), max_replicas: 1 });

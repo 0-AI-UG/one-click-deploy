@@ -78,10 +78,27 @@ type Readiness = {
   actions: Array<{ command: string; label: string }>;
 };
 
-type AdminSection = "overview" | "infrastructure" | "build" | "panel" | "users";
+type ProviderUse = "infrastructure" | "object_storage";
+type ProviderField = { key: string; label: string; type: "text" | "password" | "url"; placeholder?: string; secret?: boolean };
+type ProviderCatalogEntry = {
+  kind: string; name: string; description: string; capabilities: ProviderUse[]; fields: ProviderField[];
+};
+type ProviderConnection = {
+  id: string; kind: string; name: string; config: Record<string, string>;
+  credentials: Record<string, string>; capabilities: ProviderUse[]; configured: boolean;
+};
+type ProviderAssignments = Record<ProviderUse, string>;
+type ProvidersResponse = {
+  catalog: ProviderCatalogEntry[];
+  providers: ProviderConnection[];
+  assignments: ProviderAssignments;
+};
+
+type AdminSection = "overview" | "providers" | "infrastructure" | "build" | "panel" | "users";
 
 const ADMIN_SECTIONS: Array<{ key: AdminSection; label: string }> = [
   { key: "overview", label: "Overview" },
+  { key: "providers", label: "Providers" },
   { key: "infrastructure", label: "Infrastructure" },
   { key: "build", label: "Build & Registry" },
   { key: "panel", label: "Panel" },
@@ -101,13 +118,18 @@ export function UsersPage() {
 
   // --- Instance Settings ---
   const [settingsForm, setSettingsForm] = useState({
-    hetzner_api_token: "",
-    hetzner_s3_access_key: "", hetzner_s3_secret_key: "", hetzner_s3_region: "fsn1",
     github_oauth_client_id: "", github_oauth_client_secret: "",
     default_domain_suffix: "", default_server_type: "", default_location: "",
     oci_artifact_ref: "", oci_registry_username: "", oci_registry_password: "",
     github_build_host: "", github_build_username: "", github_build_token: "",
   });
+  const [providerData, setProviderData] = useState<ProvidersResponse>({
+    catalog: [], providers: [], assignments: { infrastructure: "", object_storage: "" },
+  });
+  const [providerForm, setProviderForm] = useState<{
+    id: string; kind: string; name: string; values: Record<string, string>;
+  } | null>(null);
+  const [providerBusy, setProviderBusy] = useState(false);
   const [registryConnected, setRegistryConnected] = useState(false);
   const [sourceConnected, setSourceConnected] = useState(false);
   const [connectionBusy, setConnectionBusy] = useState<"registry" | "source" | null>(null);
@@ -118,7 +140,7 @@ export function UsersPage() {
   const [registryEditing, setRegistryEditing] = useState(false);
   const [sourceEditing, setSourceEditing] = useState(false);
   const [oauthEditing, setOauthEditing] = useState(false);
-  const { serverTypes } = useServerTypes();
+  const { serverTypes, refresh: refreshServerTypes } = useServerTypes();
 
   // --- Panel ---
   const [panel, setPanel] = useState<PanelApp | null>(null);
@@ -155,6 +177,7 @@ export function UsersPage() {
     }),
   ]).catch(() => {});
   const refreshReadiness = () => get("/api/readiness").then(setReadiness).catch(() => {});
+  const refreshProviders = () => get("/api/admin/providers").then(setProviderData).catch(() => {});
 
   const loadUsers = async () => {
     try {
@@ -190,10 +213,6 @@ export function UsersPage() {
       .then((s) => {
         setRequire2fa(s.require_2fa !== false);
         setSettingsForm({
-          hetzner_api_token: s.hetzner_api_token ?? "",
-          hetzner_s3_access_key: s.hetzner_s3_access_key ?? "",
-          hetzner_s3_secret_key: s.hetzner_s3_secret_key ?? "",
-          hetzner_s3_region: s.hetzner_s3_region ?? "fsn1",
           github_oauth_client_id: s.github_oauth_client_id ?? "",
           github_oauth_client_secret: s.github_oauth_client_secret ?? "",
           default_domain_suffix: s.default_domain_suffix ?? "",
@@ -216,6 +235,7 @@ export function UsersPage() {
     refreshPanel();
     refreshRunners();
     refreshReadiness();
+    refreshProviders();
   }, []);
 
   useEffect(() => {
@@ -296,6 +316,84 @@ export function UsersPage() {
       showToast(err.message, "error");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openNewProvider = (requestedKind = "") => {
+    const kind = requestedKind;
+    const catalog = providerData.catalog.find((entry) => entry.kind === kind);
+    setProviderForm({
+      id: "",
+      kind,
+      name: catalog?.name ?? "",
+      values: kind === "s3-compatible" ? { region: "us-east-1", endpoint: "" } : {},
+    });
+  };
+
+  const selectProviderKind = (kind: string) => {
+    const catalog = providerData.catalog.find((entry) => entry.kind === kind);
+    setProviderForm({
+      id: "",
+      kind,
+      name: catalog?.name ?? "",
+      values: kind === "s3-compatible" ? { region: "us-east-1", endpoint: "" } : {},
+    });
+  };
+
+  const editProvider = (provider: ProviderConnection) => {
+    setProviderForm({ id: provider.id, kind: provider.kind, name: provider.name, values: { ...provider.config } });
+  };
+
+  const saveProvider = async () => {
+    if (!providerForm) return;
+    const catalog = providerData.catalog.find((entry) => entry.kind === providerForm.kind);
+    if (!catalog) return;
+    const config = Object.fromEntries(catalog.fields.filter((field) => !field.secret).map((field) => [field.key, providerForm.values[field.key] ?? ""]));
+    const credentials = Object.fromEntries(catalog.fields.filter((field) => field.secret).map((field) => [field.key, providerForm.values[field.key] ?? ""]));
+    setProviderBusy(true);
+    try {
+      const body = { kind: providerForm.kind, name: providerForm.name, config, credentials };
+      if (providerForm.id) await put(`/api/admin/providers/${providerForm.id}`, body);
+      else await post("/api/admin/providers", body);
+      await refreshProviders();
+      await refreshReadiness();
+      await refreshServerTypes();
+      setProviderForm(null);
+      showToast(providerForm.id ? "Provider updated" : "Provider added", "success");
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setProviderBusy(false);
+    }
+  };
+
+  const removeProvider = async (provider: ProviderConnection) => {
+    if (!await confirm("Remove Provider", `Remove “${provider.name}” and its stored credentials?`, true)) return;
+    setProviderBusy(true);
+    try {
+      await del(`/api/admin/providers/${provider.id}`);
+      await refreshProviders();
+      showToast("Provider removed", "success");
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setProviderBusy(false);
+    }
+  };
+
+  const saveAssignments = async () => {
+    setProviderBusy(true);
+    try {
+      await put("/api/admin/providers/assignments", providerData.assignments);
+      await refreshProviders();
+      await refreshReadiness();
+      await refreshServerTypes();
+      showToast("Provider assignments saved", "success");
+    } catch (err: any) {
+      showToast(err.message, "error");
+      await refreshProviders();
+    } finally {
+      setProviderBusy(false);
     }
   };
 
@@ -443,7 +541,7 @@ export function UsersPage() {
 
   return (
     <PageShell>
-      <PageHeader title="Admin" description="Infrastructure, build delivery, panel settings, and user access." />
+      <PageHeader title="Admin" description="Providers, infrastructure defaults, build delivery, panel settings, and user access." />
 
       <TabBar tabs={ADMIN_SECTIONS} active={section} onChange={setSection} />
 
@@ -457,7 +555,7 @@ export function UsersPage() {
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
           {[
-            ["Provider", readiness.provider.configured ? "Connected" : "Optional"],
+            ["Infrastructure", readiness.provider.configured ? "Provider assigned" : "Connected hosts only"],
             ["Capacity defaults", readiness.defaults.server_type ? `${readiness.defaults.server_type} / ${readiness.defaults.location}` : "Missing"],
             ["Build worker", `${readiness.worker.online} online`],
             ["Registry", readiness.registry.configured ? readiness.registry.scope : "Not connected"],
@@ -477,7 +575,8 @@ export function UsersPage() {
       {section === "overview" && (
         <Card className="overflow-hidden">
           {[
-            { key: "infrastructure" as const, label: "Infrastructure", value: readiness?.provider.configured ? "Cloud provider connected" : "Using connected servers" },
+            { key: "providers" as const, label: "Providers", value: `${providerData.providers.length} configured · ${providerData.assignments.object_storage ? "object storage assigned" : "object storage optional"}` },
+            { key: "infrastructure" as const, label: "Infrastructure", value: readiness?.provider.configured ? "Managed provisioning available" : "Using connected servers" },
             { key: "build" as const, label: "Build & Registry", value: `${readiness?.worker.online ?? 0} workers · ${registryConnected ? "registry connected" : "registry not connected"}` },
             { key: "panel" as const, label: "Panel", value: panel ? panel.status : "Not self-hosted" },
             { key: "users" as const, label: "Users & Security", value: `${users.length} users · ${require2fa ? "2FA required" : "2FA optional"}` },
@@ -490,45 +589,135 @@ export function UsersPage() {
         </Card>
       )}
 
+      {section === "providers" && <div className="space-y-4">
+        <Card className="p-5 space-y-4">
+          <div>
+            <h2 className="font-mono text-[10px] font-bold uppercase tracking-wider">Provider assignments</h2>
+            <p className="mt-1 font-mono text-[9px] text-muted">Choose the infrastructure provider for managed servers and their block volumes, plus an independent object-storage provider. Existing resources retain the provider recorded on them.</p>
+          </div>
+          {([
+            ["infrastructure", "Infrastructure & block storage", "Controls managed servers, networking, firewalls, and new managed block volumes. Leave empty to use connected hosts and local storage."],
+            ["object_storage", "Object storage", "An independent S3-compatible provider used for buckets."],
+          ] as Array<[ProviderUse, string, string]>).map(([use, label, hint]) => (
+            <Field key={use} label={label} align="start" hint={hint}>
+              <NeoSelect
+                value={providerData.assignments[use]}
+                onChange={(value) => setProviderData((current) => ({ ...current, assignments: { ...current.assignments, [use]: value } }))}
+                options={[
+                  { value: "", label: use === "infrastructure" ? "Connected hosts + local storage" : "Disabled" },
+                  ...providerData.providers.filter((provider) => provider.capabilities.includes(use)).map((provider) => ({ value: provider.id, label: provider.name })),
+                ]}
+              />
+            </Field>
+          ))}
+          {!providerData.providers.some((provider) => provider.capabilities.includes("object_storage")) && (
+            <div className="flex items-center justify-between gap-3 border-2 border-dashed border-fg/20 p-3">
+              <span className="font-mono text-[9px] text-muted">No object-storage provider has been added yet.</span>
+              <Btn size="xs" onClick={() => openNewProvider("s3-compatible")}><Plus size={11} /> Add object storage</Btn>
+            </div>
+          )}
+          <div className="flex justify-end"><Btn variant="primary" loading={providerBusy} onClick={saveAssignments}><Save size={13} /> Save assignments</Btn></div>
+        </Card>
+
+        <Card className="p-5 space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-mono text-[10px] font-bold uppercase tracking-wider">Provider connections</h2>
+              <p className="mt-1 font-mono text-[9px] text-muted">Configuration and credentials are kept together and verified before they are saved.</p>
+            </div>
+            <Btn size="xs" variant="primary" onClick={providerForm ? () => setProviderForm(null) : () => openNewProvider()}>
+              <Plus size={11} /> {providerForm ? "Close" : "Add provider"}
+            </Btn>
+          </div>
+
+          {providerData.providers.length === 0 && !providerForm && (
+            <div className="border-2 border-dashed border-fg/20 p-5 text-center font-mono text-[9px] text-muted">No providers configured. Connected hosts and local storage still work without one.</div>
+          )}
+
+          {providerData.providers.map((provider) => {
+            const assigned = (Object.entries(providerData.assignments) as Array<[ProviderUse, string]>)
+              .filter(([, id]) => id === provider.id).map(([use]) => use.replace("_", " "));
+            return <div key={provider.id} className="border-2 border-fg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono text-[10px] font-bold">{provider.name}</span>
+                  <span className={`font-mono text-[8px] font-bold uppercase border-2 border-fg px-1.5 py-0.5 ${provider.configured ? "bg-accent/30" : "bg-accent-red/20"}`}>{provider.configured ? "Verified" : "Incomplete"}</span>
+                </div>
+                <div className="mt-1 font-mono text-[9px] text-muted">{providerData.catalog.find((entry) => entry.kind === provider.kind)?.name ?? provider.kind}</div>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {provider.capabilities.map((capability) => <span key={capability} className="font-mono text-[8px] uppercase bg-alt border border-fg/30 px-1.5 py-0.5">{capability === "infrastructure" ? "Infrastructure + block storage" : "Object storage"}</span>)}
+                  {assigned.map((use) => <span key={use} className="font-mono text-[8px] uppercase bg-accent-amber/30 border border-fg/30 px-1.5 py-0.5">Used for {use}</span>)}
+                </div>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <Btn size="xs" onClick={() => editProvider(provider)}>Edit</Btn>
+                <Btn size="xs" variant="danger" disabled={providerBusy || assigned.length > 0} onClick={() => removeProvider(provider)}><Trash2 size={11} /></Btn>
+              </div>
+            </div>;
+          })}
+
+          {providerForm && (() => {
+            const catalog = providerData.catalog.find((entry) => entry.kind === providerForm.kind);
+            if (!catalog) return <div className="animate-slide-up border-2 border-fg bg-alt/30 p-4 space-y-3">
+              <h3 className="font-mono text-[9px] font-bold uppercase">Choose provider type</h3>
+              <div className="grid sm:grid-cols-2 gap-3">
+                {providerData.catalog.map((entry) => {
+                  const unavailable = entry.capabilities.includes("infrastructure") && providerData.providers.some((provider) => provider.kind === entry.kind);
+                  return <button
+                    key={entry.kind}
+                    type="button"
+                    disabled={unavailable}
+                    onClick={() => selectProviderKind(entry.kind)}
+                    className="border-2 border-fg bg-bg-raised p-4 text-left hover:bg-alt disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <div className="font-mono text-[10px] font-bold">{entry.name}</div>
+                    <div className="mt-1 font-mono text-[9px] text-muted">{entry.description}</div>
+                    {unavailable && <div className="mt-2 font-mono text-[8px] font-bold uppercase">Already configured — edit the existing connection</div>}
+                  </button>;
+                })}
+              </div>
+            </div>;
+            return <div className="animate-slide-up border-2 border-fg bg-alt/30 p-4 space-y-2">
+              <h3 className="font-mono text-[9px] font-bold uppercase">{providerForm.id ? "Edit provider" : "Add provider"}</h3>
+              {!providerForm.id && <Field label="Provider type">
+                <NeoSelect value={providerForm.kind} onChange={selectProviderKind} options={providerData.catalog.map((entry) => ({ value: entry.kind, label: entry.name }))} />
+              </Field>}
+              <p className="font-mono text-[9px] text-muted">{catalog.description}</p>
+              <Field label="Connection name">
+                <input value={providerForm.name} onChange={(event) => setProviderForm((current) => current ? { ...current, name: event.target.value } : current)} placeholder={catalog.name} />
+              </Field>
+              <Divider />
+              {catalog.fields.map((field) => <Field key={field.key} label={field.label} align="start" hint={field.secret && providerForm.id ? "Leave empty to keep the current encrypted credential." : undefined}>
+                <input
+                  type={field.type}
+                  value={providerForm.values[field.key] ?? ""}
+                  onChange={(event) => setProviderForm((current) => current ? { ...current, values: { ...current.values, [field.key]: event.target.value } } : current)}
+                  placeholder={field.secret && providerForm.id ? "Leave empty to keep current credential" : field.placeholder}
+                  autoComplete={field.secret ? "new-password" : undefined}
+                />
+              </Field>)}
+              <div className="flex justify-end gap-2 pt-2">
+                <Btn onClick={() => setProviderForm(null)}>Cancel</Btn>
+                <Btn variant="primary" loading={providerBusy} disabled={!providerForm.name.trim()} onClick={saveProvider}><Key size={13} /> Verify & save</Btn>
+              </div>
+            </div>;
+          })()}
+        </Card>
+      </div>}
+
       {/* Instance Settings */}
       {section === "infrastructure" && <Card className="p-5 space-y-4">
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="font-mono text-[10px] font-bold uppercase tracking-wider">Infrastructure defaults</h2>
             <div className="mt-1 font-mono text-[9px] text-muted">
-              {readiness?.provider.configured ? "Hetzner connected" : "Connected servers only"} · {settingsForm.default_server_type || "No server default"} {settingsForm.default_location && `· ${settingsForm.default_location}`}
+              {readiness?.provider.configured ? "Managed provisioning available" : "Connected servers only"} · {settingsForm.default_server_type || "No server default"} {settingsForm.default_location && `· ${settingsForm.default_location}`}
             </div>
           </div>
           <Btn size="xs" onClick={() => setInfrastructureEditing((open) => !open)}>{infrastructureEditing ? "Close" : "Edit"}</Btn>
         </div>
 
         {infrastructureEditing && <div className="animate-slide-up border-t-2 border-fg/10 pt-2">
-          <Field label="Cloud provider token" align="start" hint="Optional. Add a Hetzner token only when OCD should create and own servers and volumes. Leave it empty to use connected servers.">
-            <input type="password" value={settingsForm.hetzner_api_token} onChange={setS("hetzner_api_token")} placeholder={readiness?.provider.configured ? "Leave empty to keep current token" : "Hetzner API token"} />
-          </Field>
-          <Divider />
-          <div>
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Hetzner Object Storage</h3>
-            <p className="mt-1 font-mono text-[9px] text-muted">Generate S3 credentials in Hetzner Console. These are separate from the Cloud API token and are stored encrypted by OCD.</p>
-          </div>
-          <Field label="S3 access key">
-            <input type="password" value={settingsForm.hetzner_s3_access_key} onChange={setS("hetzner_s3_access_key")} placeholder="Hetzner S3 access key" autoComplete="off" />
-          </Field>
-          <Field label="S3 secret key" align="start" hint="Clear both S3 key fields and save to disconnect Object Storage.">
-            <input type="password" value={settingsForm.hetzner_s3_secret_key} onChange={setS("hetzner_s3_secret_key")} placeholder="Hetzner S3 secret key" autoComplete="new-password" />
-          </Field>
-          <Field label="S3 region">
-            <NeoSelect
-              value={settingsForm.hetzner_s3_region}
-              onChange={(v) => setSettingsForm((f) => ({ ...f, hetzner_s3_region: v }))}
-              options={[
-                { value: "fsn1", label: "Falkenstein (fsn1)" },
-                { value: "nbg1", label: "Nuremberg (nbg1)" },
-                { value: "hel1", label: "Helsinki (hel1)" },
-              ]}
-            />
-          </Field>
-          <Divider />
           <Field label="App domain" align="start" hint="Used as the default domain suffix. OCD shows the DNS records to create but never changes DNS.">
             <input type="text" value={settingsForm.default_domain_suffix} onChange={setS("default_domain_suffix")} placeholder="apps.example.com" />
           </Field>

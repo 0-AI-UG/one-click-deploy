@@ -145,11 +145,11 @@ describe("secret-store: encryption properties", () => {
   });
 });
 
-describe("secret-store: getProviderToken", () => {
+describe("secret-store: getInfrastructureToken", () => {
   beforeEach(clearAll);
 
   test("returns empty string when the active provider has no token stored", async () => {
-    expect(await secretStore.getProviderToken()).toBe("");
+    expect(await secretStore.getInfrastructureToken("hetzner")).toBe("");
   });
 });
 

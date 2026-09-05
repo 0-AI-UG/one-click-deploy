@@ -3,6 +3,7 @@ import db from "./connection.ts";
 export type RetiredVolumeRow = {
   id: number;
   provider_volume_id: string;
+  driver_id: string;
   former_resource_type: string;
   former_resource_id: number;
   former_resource_name: string;
@@ -20,12 +21,14 @@ export function retireVolume(data: {
   formerResourceName: string;
   reason: string;
   retentionClass?: "user" | "provisional";
+  driverId: string;
 }): RetiredVolumeRow {
   return db.query(
     `INSERT INTO retired_volumes
-      (provider_volume_id, former_resource_type, former_resource_id, former_resource_name, reason, retention_class)
-      VALUES (?, ?, ?, ?, ?, ?)
+      (provider_volume_id, driver_id, former_resource_type, former_resource_id, former_resource_name, reason, retention_class)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(provider_volume_id) DO UPDATE SET
+        driver_id = excluded.driver_id,
         reason = excluded.reason,
         state = 'detached',
         retired_at = datetime('now'),
@@ -34,6 +37,7 @@ export function retireVolume(data: {
       RETURNING *`,
   ).get(
     data.providerVolumeId,
+    data.driverId,
     data.formerResourceType,
     data.formerResourceId,
     data.formerResourceName,

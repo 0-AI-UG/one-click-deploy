@@ -1,4 +1,4 @@
-import { useTempDataDir, makeFakeComputeProvider, randomSuffix } from "../../shared/test-helpers.ts";
+import { useTempDataDir, makeFakeComputeProvider, randomSuffix, configureTestInfrastructureProvider } from "../../shared/test-helpers.ts";
 useTempDataDir();
 
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
@@ -20,6 +20,7 @@ mock.module("../../shared/remote/index.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
+import { __replaceInfrastructureProvidersForTest } from "../../shared/providers/registry.ts";
 import attachVolumeOp from "./attach-volume.ts";
 import attachExistingVolumeOp from "./attach-existing-volume.ts";
 import { __setBindImplForTest, __resetBindImplForTest } from "./_volumes.ts";
@@ -59,6 +60,8 @@ function makeApp(opts: { minReplicas?: number; maxReplicas?: number; withVolume?
     type: "cx22",
     location: "fsn1",
     status: "ready",
+    provider: "hetzner",
+    ownership: "managed",
   });
   const name = `av-${randomSuffix()}`;
   const { app, replica } = db.insertAppWithFirstReplica(
@@ -73,6 +76,8 @@ function makeApp(opts: { minReplicas?: number; maxReplicas?: number; withVolume?
 }
 
 beforeEach(() => {
+  __replaceInfrastructureProvidersForTest([compute]);
+  configureTestInfrastructureProvider(compute.id);
   compute._mocks.volumeCreate.mockClear();
   compute._mocks.volumeDelete.mockClear();
   compute._mocks.volumeAttach.mockClear();
@@ -117,7 +122,7 @@ describe("attach_volume: create_volume", () => {
   test("creates a deterministically-named volume from the op id", async () => {
     const { app, server } = makeApp();
     const { ctx } = makeCtx({ appId: app.id, sizeGb: 25 }, 77);
-    const target = { providerServerId: server.provider_id, serverLocation: "fsn1", appName: app.name } as any;
+    const target = { serverId: server.id, providerServerId: server.provider_id, serverLocation: "fsn1", appName: app.name, driverId: "hetzner-block" } as any;
     const out = (await step.run(ctx, { validate: target })) as any;
     expect(compute._mocks.volumeCreate).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeCreate.mock.calls[0][0]).toMatchObject({
@@ -130,8 +135,9 @@ describe("attach_volume: create_volume", () => {
   });
 
   test("compensate detaches and retains the volume", async () => {
+    const { server } = makeApp();
     const { ctx } = makeCtx({ appId: 1, sizeGb: 10 });
-    await step.compensate!(ctx, { volumeId: "v-abc", hostMountPath: "/mnt/x", volName: "x" }, {});
+    await step.compensate!(ctx, { volumeId: "v-abc", driverId: "hetzner-block", hostMountPath: "/mnt/x", volName: "x" }, { validate: { serverId: server.id } });
     expect(compute._mocks.volumeDetach).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
     expect(db.getRetiredVolumes().find((v) => v.provider_volume_id === "v-abc")?.retention_class).toBe("provisional");
@@ -143,6 +149,7 @@ describe("attach_volume: create_volume", () => {
     const name = `ocd-${app.name}-op${opId}`;
     db.retireVolume({
       providerVolumeId: "v-retained",
+      driverId: "hetzner-block",
       formerResourceType: "app",
       formerResourceId: app.id,
       formerResourceName: app.name,
@@ -157,6 +164,8 @@ describe("attach_volume: create_volume", () => {
     }]);
     const { ctx } = makeCtx({ appId: app.id, sizeGb: 10 }, opId);
     const target = {
+      serverId: server.id,
+      driverId: "hetzner-block",
       providerServerId: server.provider_id,
       serverLocation: "fsn1",
       appName: app.name,
@@ -169,10 +178,10 @@ describe("attach_volume: attach_to_app", () => {
   const step = stepByName("attach_to_app");
 
   test("records the volume and forces min/max replicas to 1, storing the prior values", async () => {
-    const { app } = makeApp({ minReplicas: 2, maxReplicas: 5 });
+    const { app, server } = makeApp({ minReplicas: 2, maxReplicas: 5 });
     const { ctx } = makeCtx({ appId: app.id, sizeGb: 10, mountPath: "/var/data" });
-    const vol = { volumeId: "v-new", hostMountPath: `/mnt/ocd-${app.name}-op42`, volName: "x" };
-    const out = (await step.run(ctx, { create_volume: vol })) as any;
+    const vol = { volumeId: "v-new", driverId: "hetzner-block", hostMountPath: `/mnt/ocd-${app.name}-op42`, volName: "x" };
+    const out = (await step.run(ctx, { validate: { serverId: server.id, priorMinReplicas: 2, priorMaxReplicas: 5 }, create_volume: vol })) as any;
     expect(out.priorMinReplicas).toBe(2);
     expect(out.priorMaxReplicas).toBe(5);
     expect(out.volumeMount).toBe(`/mnt/ocd-${app.name}-op42:/var/data`);
@@ -202,7 +211,7 @@ describe("attach_volume: recreate_container", () => {
   const step = stepByName("recreate_container");
 
   test("throws when recreateAppContainer fails", async () => {
-    const { app } = makeApp();
+    const { app, server } = makeApp();
     recreateAppContainer.mockImplementationOnce(async () => ({ ok: false, error: "boom" }));
     const { ctx } = makeCtx({ appId: app.id, sizeGb: 10 });
     expect(step.run(ctx, { attach_to_app: { volumeMount: "/mnt/x:/data" } })).rejects.toThrow(/boom/);
@@ -246,9 +255,9 @@ describe("attach_existing_volume: marks the volume as attached (detach-not-delet
   const step = attachExistingVolumeOp.steps.find((s) => s.name === "attach_to_app")!;
 
   test("attach_to_app records the volume with volume_attached=1", async () => {
-    const { app } = makeApp();
+    const { app, server } = makeApp();
     const { ctx } = makeCtx({ appId: app.id, volumeId: "vol-preexisting", mountPath: "/data" });
-    await step.run(ctx, {});
+    await step.run(ctx, { validate: { hostMountPath: "/mnt/vol-vol-preexisting", driverId: "hetzner-block", serverId: server.id, priorMinReplicas: 1, priorMaxReplicas: 1 } });
     const fresh = db.getApp(app.id)!;
     expect(fresh.volume_id).toBe("vol-preexisting");
     // Pre-existing volume → attached, so destroy will DETACH (never delete) it.

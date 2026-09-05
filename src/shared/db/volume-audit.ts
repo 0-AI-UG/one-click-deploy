@@ -4,6 +4,7 @@ export type VolumeDeletionAuditRow = {
   id: number;
   actor_user_id: string;
   provider_volume_id: string;
+  driver_id: string;
   provider_volume_name: string;
   former_resource_type: string;
   former_resource_id: number;
@@ -21,6 +22,7 @@ export function beginVolumeDeletionAudit(input: {
   actorUserId: string;
   providerVolumeId: string;
   providerVolumeName: string;
+  driverId: string;
   formerResourceType?: string;
   formerResourceId?: number;
   formerResourceName?: string;
@@ -30,15 +32,16 @@ export function beginVolumeDeletionAudit(input: {
 }): VolumeDeletionAuditRow {
   return db.query(
     `INSERT INTO volume_deletion_audit
-      (actor_user_id, provider_volume_id, provider_volume_name,
+      (actor_user_id, provider_volume_id, provider_volume_name, driver_id,
        former_resource_type, former_resource_id, former_resource_name,
        retention_state, retired_at, purge_after)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      RETURNING *`,
   ).get(
     input.actorUserId,
     input.providerVolumeId,
     input.providerVolumeName,
+    input.driverId,
     input.formerResourceType ?? "",
     input.formerResourceId ?? 0,
     input.formerResourceName ?? "",

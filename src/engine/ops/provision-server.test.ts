@@ -1,10 +1,9 @@
-import { useTempDataDir, makeFakeComputeProvider, randomSuffix } from "../../shared/test-helpers.ts";
+import { useTempDataDir, makeFakeComputeProvider, randomSuffix, configureTestInfrastructureProvider } from "../../shared/test-helpers.ts";
 useTempDataDir();
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 const compute = makeFakeComputeProvider();
-mock.module("../../shared/providers/index.ts", () => ({ hetzner: compute }));
 mock.module("../../shared/remote/index.ts", () => ({
   getOrCreateLocalKeyPair: mock(async () => ({ publicKey: "ssh-ed25519 test" })),
   waitForServer: mock(async () => {}),
@@ -14,6 +13,7 @@ mock.module("../../shared/remote/index.ts", () => ({
 mock.module("../network.ts", () => ({ ensureNetwork: mock(async () => "net-1") }));
 
 import * as db from "../../shared/db.ts";
+import { __replaceInfrastructureProvidersForTest } from "../../shared/providers/registry.ts";
 import provisionServerOp from "./provision-server.ts";
 
 function ctx(input: Record<string, unknown>, opId = 73) {
@@ -39,6 +39,8 @@ function step(name: string) {
 }
 
 beforeEach(() => {
+  __replaceInfrastructureProvidersForTest([compute]);
+  configureTestInfrastructureProvider(compute.id);
   compute._mocks.createServer.mockClear();
   compute._mocks.getServer.mockClear();
   compute.listServers = async () => [];
@@ -65,6 +67,8 @@ describe("provision_server crash identity", () => {
       type: "cx22",
       location: "fsn1",
       status: "creating",
+      provider: compute.id,
+      ownership: "managed",
     });
     compute.listServers = async () => [{
       providerId: "h-adopted",
@@ -79,7 +83,7 @@ describe("provision_server crash identity", () => {
       providerId: "h-adopted",
       ipv4: "10.0.0.9",
       ipv6: "",
-      privateIpv4: "10.1.0.9",
+      routingAddress: "10.1.0.9",
       status: "running",
     }));
 
@@ -92,7 +96,7 @@ describe("provision_server crash identity", () => {
     expect(db.getServer(row.id)).toMatchObject({
       provider_id: "h-adopted",
       ipv4: "10.0.0.9",
-      private_ipv4: "10.1.0.9",
+      routing_address: "10.1.0.9",
       status: "provisioning",
     });
     expect(compute._mocks.createServer).not.toHaveBeenCalled();
@@ -108,6 +112,8 @@ describe("provision_server crash identity", () => {
       type: "cx22",
       location: "fsn1",
       status: "creating",
+      provider: compute.id,
+      ownership: "managed",
     });
     compute.listServers = async () => { throw new Error("provider unavailable"); };
     await expect(step("create_cloud_server").run(

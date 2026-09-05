@@ -1,10 +1,9 @@
 import * as db from "../../shared/db.ts";
-import { hetzner } from "../../shared/providers/index.ts";
 import { recreateAppContainer } from "../deploy/index.ts";
+import { requireStorageDriver } from "../storage/index.ts";
 import { registerOp } from "./registry.ts";
 import { ensureBindMount, removeBindMount, removeBindMountBestEffort } from "./_volumes.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
-import { assertProviderVolumesSupported } from "../../shared/infrastructure.ts";
 
 // Move a volume through small, durable transitions. The source transitions are
 // intentionally ordered so their reverse compensations form a valid restore:
@@ -18,6 +17,8 @@ type ReattachVolumeInput = {
 };
 
 type ValidateOut = {
+  driverId: string;
+  fromServerId: number;
   fromProviderServerId: string;
   fromServerIp: string;
   fromHostKey: string;
@@ -25,6 +26,7 @@ type ValidateOut = {
   fromVolumeMount: string;
   fromVolumeAttached: boolean;
   fromExtraVolumes: string;
+  toServerId: number;
   toProviderServerId: string;
   toServerIp: string;
   toHostKey: string;
@@ -40,8 +42,10 @@ async function recreateOrThrow(appId: number, mount: string | undefined, extraVo
   if (!result.ok) throw new Error(result.error || message);
 }
 
-async function providerServerId(volumeId: string): Promise<string | null> {
-  return (await hetzner.volumes.get(volumeId)).serverId;
+async function attachedServerId(volumeId: string, v: ValidateOut): Promise<string | null> {
+  const server = db.getServer(v.fromServerId) ?? db.getServer(v.toServerId);
+  if (!server) throw new Error("Server not found");
+  return (await requireStorageDriver(v.driverId).inspect(volumeId, server)).attachedServerId;
 }
 
 const validate: Step<ReattachVolumeInput, ValidateOut> = {
@@ -63,16 +67,23 @@ const validate: Step<ReattachVolumeInput, ValidateOut> = {
     const fromServer = fromReps[0] ? db.getServer(fromReps[0].server_id) : null;
     const toServer = toReps[0] ? db.getServer(toReps[0].server_id) : null;
     if (!fromServer || !toServer) throw new Error("Server not found");
-    assertProviderVolumesSupported(fromServer);
-    assertProviderVolumesSupported(toServer);
-    if (fromServer.location !== toServer.location) {
+    const driver = requireStorageDriver(fromApp.volume_driver);
+    if (!driver.supports(fromServer) || !driver.supports(toServer)) {
+      throw new Error(`Storage driver ${driver.id} does not support both servers`);
+    }
+    if (!driver.portable && fromServer.id !== toServer.id) {
+      throw new Error(`Storage driver ${driver.id} cannot move volumes between servers`);
+    }
+    if (driver.portable && fromServer.location !== toServer.location) {
       throw new Error(`Cannot reattach: volume in ${fromServer.location}, target in ${toServer.location}`);
     }
 
     const containerPath = ctx.input.mountPath || "/data";
-    const toHostMountPath = `/mnt/ocd-${toApp.name}-data`;
     const fromHostMountPath = fromApp.volume_mount?.split(":")[0] || `/mnt/ocd-${fromApp.name}-data`;
+    const toHostMountPath = driver.portable ? `/mnt/ocd-${toApp.name}-data` : fromHostMountPath;
     return {
+      driverId: driver.id,
+      fromServerId: fromServer.id,
       fromProviderServerId: fromServer.provider_id,
       fromServerIp: fromServer.ipv4,
       fromHostKey: fromServer.ssh_host_key || "",
@@ -80,6 +91,7 @@ const validate: Step<ReattachVolumeInput, ValidateOut> = {
       fromVolumeMount: fromApp.volume_mount || `${fromHostMountPath}:${containerPath}`,
       fromVolumeAttached: !!fromApp.volume_attached,
       fromExtraVolumes: fromApp.extra_volumes,
+      toServerId: toServer.id,
       toProviderServerId: toServer.provider_id,
       toServerIp: toServer.ipv4,
       toHostKey: toServer.ssh_host_key || "",
@@ -130,7 +142,7 @@ const clearSourceApp: Step<ReattachVolumeInput, OkOut> = {
   async compensate(ctx, _out, prior) {
     const v = prior["validate"] as ValidateOut | undefined;
     if (!v) return;
-    db.updateAppVolume(ctx.input.fromAppId, ctx.input.volumeId, v.fromVolumeMount, v.fromVolumeAttached);
+    db.updateAppVolume(ctx.input.fromAppId, ctx.input.volumeId, v.fromVolumeMount, v.fromVolumeAttached, v.driverId);
   },
   async probeCompensated(ctx, _out, prior) {
     const v = prior["validate"] as ValidateOut | undefined;
@@ -147,16 +159,17 @@ const removeSourceBind: Step<ReattachVolumeInput, OkOut> = {
     const v = prior["validate"] as ValidateOut;
     try {
       await removeBindMount({
-        serverIp: v.fromServerIp,
-        hostKey: v.fromHostKey,
+        serverId: v.fromServerId,
+        driverId: v.driverId,
+        volumeId: ctx.input.volumeId,
         hostMountPath: v.fromHostMountPath,
         appId: ctx.input.fromAppId,
       });
     } catch (err) {
       // Removal may have partially changed fstab/mount state.
       await ensureBindMount({
-        serverIp: v.fromServerIp,
-        hostKey: v.fromHostKey,
+        serverId: v.fromServerId,
+        driverId: v.driverId,
         volumeId: ctx.input.volumeId,
         hostMountPath: v.fromHostMountPath,
         appId: ctx.input.fromAppId,
@@ -169,8 +182,8 @@ const removeSourceBind: Step<ReattachVolumeInput, OkOut> = {
     const v = prior["validate"] as ValidateOut | undefined;
     if (!v) return;
     await ensureBindMount({
-      serverIp: v.fromServerIp,
-      hostKey: v.fromHostKey,
+      serverId: v.fromServerId,
+      driverId: v.driverId,
       volumeId: ctx.input.volumeId,
       hostMountPath: v.fromHostMountPath,
       appId: ctx.input.fromAppId,
@@ -181,25 +194,31 @@ const removeSourceBind: Step<ReattachVolumeInput, OkOut> = {
 const detachSourceProvider: Step<ReattachVolumeInput, OkOut> = {
   name: "detach_source_provider",
   label: "Detach volume from source server",
-  async probe(ctx) {
-    return (await providerServerId(ctx.input.volumeId)) == null ? { ok: true } : null;
+  async probe(ctx, prior) {
+    const v = prior["validate"] as ValidateOut;
+    if (!requireStorageDriver(v.driverId).portable) return { ok: true };
+    return (await attachedServerId(ctx.input.volumeId, v)) == null ? { ok: true } : null;
   },
   async run(ctx, prior) {
     const v = prior["validate"] as ValidateOut;
-    const before = await providerServerId(ctx.input.volumeId);
+    const driver = requireStorageDriver(v.driverId);
+    if (!driver.portable) return { ok: true };
+    const fromServer = db.getServer(v.fromServerId);
+    if (!fromServer) throw new Error("Source server not found");
+    const before = await attachedServerId(ctx.input.volumeId, v);
     if (before == null) return { ok: true };
     if (before !== v.fromProviderServerId) {
       throw new Error(`Refusing to detach volume ${ctx.input.volumeId} from unexpected server ${before}`);
     }
     try {
-      await hetzner.volumes.detach(ctx.input.volumeId);
-      const after = await providerServerId(ctx.input.volumeId);
+      await driver.detach(ctx.input.volumeId, fromServer);
+      const after = await attachedServerId(ctx.input.volumeId, v);
       if (after != null) throw new Error(`Provider did not confirm volume ${ctx.input.volumeId} was detached`);
     } catch (err) {
       // A provider timeout may happen after detach. Since this failing step
       // receives no runner compensation, restore it before surfacing failure.
-      if ((await providerServerId(ctx.input.volumeId)) == null) {
-        await hetzner.volumes.attach(ctx.input.volumeId, v.fromProviderServerId);
+      if ((await attachedServerId(ctx.input.volumeId, v)) == null) {
+        await driver.attach(ctx.input.volumeId, fromServer);
       }
       throw err;
     }
@@ -208,17 +227,22 @@ const detachSourceProvider: Step<ReattachVolumeInput, OkOut> = {
   async compensate(ctx, _out, prior) {
     const v = prior["validate"] as ValidateOut | undefined;
     if (!v) return;
-    const current = await providerServerId(ctx.input.volumeId);
+    const driver = requireStorageDriver(v.driverId);
+    if (!driver.portable) return;
+    const fromServer = db.getServer(v.fromServerId);
+    if (!fromServer) throw new Error("Source server not found");
+    const current = await attachedServerId(ctx.input.volumeId, v);
     if (current === v.fromProviderServerId) return;
     if (current != null) throw new Error(`Volume ${ctx.input.volumeId} is attached to unexpected server ${current}`);
-    await hetzner.volumes.attach(ctx.input.volumeId, v.fromProviderServerId);
-    if ((await providerServerId(ctx.input.volumeId)) !== v.fromProviderServerId) {
+    await driver.attach(ctx.input.volumeId, fromServer);
+    if ((await attachedServerId(ctx.input.volumeId, v)) !== v.fromProviderServerId) {
       throw new Error(`Provider did not confirm volume ${ctx.input.volumeId} was restored to source`);
     }
   },
   async probeCompensated(ctx, _out, prior) {
     const v = prior["validate"] as ValidateOut | undefined;
-    return !!v && (await providerServerId(ctx.input.volumeId)) === v.fromProviderServerId;
+    return !!v && (!requireStorageDriver(v.driverId).portable ||
+      (await attachedServerId(ctx.input.volumeId, v)) === v.fromProviderServerId);
   },
 };
 
@@ -227,21 +251,26 @@ const attachTargetProvider: Step<ReattachVolumeInput, OkOut> = {
   label: "Attach volume to target server",
   async probe(ctx, prior) {
     const v = prior["validate"] as ValidateOut;
-    return (await providerServerId(ctx.input.volumeId)) === v.toProviderServerId ? { ok: true } : null;
+    if (!requireStorageDriver(v.driverId).portable) return { ok: true };
+    return (await attachedServerId(ctx.input.volumeId, v)) === v.toProviderServerId ? { ok: true } : null;
   },
   async run(ctx, prior) {
     const v = prior["validate"] as ValidateOut;
-    const before = await providerServerId(ctx.input.volumeId);
+    const driver = requireStorageDriver(v.driverId);
+    if (!driver.portable) return { ok: true };
+    const toServer = db.getServer(v.toServerId);
+    if (!toServer) throw new Error("Target server not found");
+    const before = await attachedServerId(ctx.input.volumeId, v);
     if (before === v.toProviderServerId) return { ok: true };
     if (before != null) throw new Error(`Volume ${ctx.input.volumeId} is still attached to server ${before}`);
     try {
-      await hetzner.volumes.attach(ctx.input.volumeId, v.toProviderServerId);
-      if ((await providerServerId(ctx.input.volumeId)) !== v.toProviderServerId) {
+      await driver.attach(ctx.input.volumeId, toServer);
+      if ((await attachedServerId(ctx.input.volumeId, v)) !== v.toProviderServerId) {
         throw new Error(`Provider did not confirm volume ${ctx.input.volumeId} was attached to target`);
       }
     } catch (err) {
-      if ((await providerServerId(ctx.input.volumeId)) === v.toProviderServerId) {
-        await hetzner.volumes.detach(ctx.input.volumeId);
+      if ((await attachedServerId(ctx.input.volumeId, v)) === v.toProviderServerId) {
+        await driver.detach(ctx.input.volumeId, toServer);
       }
       throw err;
     }
@@ -250,18 +279,23 @@ const attachTargetProvider: Step<ReattachVolumeInput, OkOut> = {
   async compensate(ctx, _out, prior) {
     const v = prior["validate"] as ValidateOut | undefined;
     if (!v) return;
-    const current = await providerServerId(ctx.input.volumeId);
+    const driver = requireStorageDriver(v.driverId);
+    if (!driver.portable) return;
+    const toServer = db.getServer(v.toServerId);
+    if (!toServer) throw new Error("Target server not found");
+    const current = await attachedServerId(ctx.input.volumeId, v);
     if (current == null) return;
     if (current !== v.toProviderServerId) {
       throw new Error(`Refusing to detach volume ${ctx.input.volumeId} from unexpected server ${current}`);
     }
-    await hetzner.volumes.detach(ctx.input.volumeId);
-    if ((await providerServerId(ctx.input.volumeId)) != null) {
+    await driver.detach(ctx.input.volumeId, toServer);
+    if ((await attachedServerId(ctx.input.volumeId, v)) != null) {
       throw new Error(`Provider did not confirm volume ${ctx.input.volumeId} was detached from target`);
     }
   },
-  async probeCompensated(ctx) {
-    return (await providerServerId(ctx.input.volumeId)) == null;
+  async probeCompensated(ctx, _out, prior) {
+    const v = prior["validate"] as ValidateOut | undefined;
+    return !!v && (!requireStorageDriver(v.driverId).portable || (await attachedServerId(ctx.input.volumeId, v)) == null);
   },
 };
 
@@ -272,16 +306,17 @@ const bindTarget: Step<ReattachVolumeInput, OkOut> = {
     const v = prior["validate"] as ValidateOut;
     try {
       await ensureBindMount({
-        serverIp: v.toServerIp,
-        hostKey: v.toHostKey,
+        serverId: v.toServerId,
+        driverId: v.driverId,
         volumeId: ctx.input.volumeId,
         hostMountPath: v.toHostMountPath,
         appId: ctx.input.toAppId,
       });
     } catch (err) {
       await removeBindMountBestEffort({
-        serverIp: v.toServerIp,
-        hostKey: v.toHostKey,
+        serverId: v.toServerId,
+        driverId: v.driverId,
+        volumeId: ctx.input.volumeId,
         hostMountPath: v.toHostMountPath,
         appId: ctx.input.toAppId,
       });
@@ -293,8 +328,9 @@ const bindTarget: Step<ReattachVolumeInput, OkOut> = {
     const v = prior["validate"] as ValidateOut | undefined;
     if (!v) return;
     await removeBindMount({
-      serverIp: v.toServerIp,
-      hostKey: v.toHostKey,
+      serverId: v.toServerId,
+      driverId: v.driverId,
+      volumeId: ctx.input.volumeId,
       hostMountPath: v.toHostMountPath,
       appId: ctx.input.toAppId,
     });
@@ -312,7 +348,7 @@ const recordTargetApp: Step<ReattachVolumeInput, OkOut> = {
   },
   async run(ctx, prior) {
     const v = prior["validate"] as ValidateOut;
-    db.updateAppVolume(ctx.input.toAppId, ctx.input.volumeId, v.toVolumeMount, v.fromVolumeAttached);
+    db.updateAppVolume(ctx.input.toAppId, ctx.input.volumeId, v.toVolumeMount, v.fromVolumeAttached, v.driverId);
     return { ok: true };
   },
   async compensate(ctx, _out, prior) {

@@ -121,8 +121,8 @@ export function buildUpstreams(appId: number): string[] {
     // app — the container is bound to the private IP. A server without one
     // gets silently skipped; the network reconciler backfills it on the
     // next tick and the ingress sync picks it up from there.
-    if (!server.private_ipv4) continue;
-    ups.push(`${server.private_ipv4}:${replica.host_port}`);
+    if (!server.routing_address) continue;
+    ups.push(`${server.routing_address}:${replica.host_port}`);
   }
   return ups.sort();
 }
@@ -159,7 +159,7 @@ export function collectDesiredState(): DesiredState {
   return {
     apps,
     panelHostPort: panel?.host_port ?? null,
-    panelPrivateIpv4: panelServer?.private_ipv4 || null,
+    panelPrivateIpv4: panelServer?.routing_address || null,
     panelPublicIpv4: panelServer?.ipv4 || null,
   };
 }

@@ -3,7 +3,7 @@ import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { listPendingOperations, listRunningOperations } from "../../shared/db/operations.ts";
-import { garbageCollectServer, inspectServerGc } from "../../engine/hetzner/prune.ts";
+import { garbageCollectServer, inspectServerGc } from "../../shared/remote/index.ts";
 
 function protectedAppNames(serverId: number): string[] {
   const placed = db.getApps(serverId).map((app) => app.name);

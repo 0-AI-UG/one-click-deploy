@@ -1,4 +1,5 @@
 import type { ProviderServer, ServerType, VolumeInfo } from "./types.ts";
+import type { InfrastructureProvider } from "./contracts.ts";
 import { hetznerApi } from "../../engine/hetzner/api.ts";
 import {
   createServer,
@@ -28,7 +29,12 @@ import { validateHetznerToken } from "../validate.ts";
 export const hetzner = {
   id: "hetzner",
   name: "Hetzner Cloud",
-  tokenKey: "hetzner_api_token",
+  capabilities: {
+    compute: true,
+    volumes: true,
+    privateNetwork: true,
+    firewall: true,
+  },
 
   validateToken(token: string) {
     return validateHetznerToken(token);
@@ -109,7 +115,7 @@ export const hetzner = {
     firewallId: string;
     userData: string;
     /** Private network to attach at create time — when set, the returned
-     *  ProviderServer.privateIpv4 reflects the assigned address. */
+     *  ProviderServer.routingAddress reflects the assigned address. */
     networkId?: string;
   }): Promise<ProviderServer> {
     const userData = opts.userData || cloudInitScript({
@@ -133,7 +139,7 @@ export const hetzner = {
       providerId: String(server.id),
       ipv4: server.public_net.ipv4.ip,
       ipv6: server.public_net.ipv6.ip || "",
-      privateIpv4: privateEntry?.ip || "",
+      routingAddress: privateEntry?.ip || "",
       status: "creating",
     };
   },
@@ -253,6 +259,6 @@ export const hetzner = {
       return null;
     }
   },
-};
+} satisfies InfrastructureProvider;
 
 export type Hetzner = typeof hetzner;

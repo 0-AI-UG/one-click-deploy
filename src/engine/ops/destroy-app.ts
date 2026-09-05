@@ -6,7 +6,7 @@ import {
 } from "../../shared/remote/index.ts";
 import { awaitChildren } from "./_children.ts";
 import { syncAllTraefik } from "../scale/traefik-manager.ts";
-import { hetzner } from "../../shared/providers/index.ts";
+import { requireStorageDriver } from "../storage/index.ts";
 import { registerOp } from "./registry.ts";
 import { assertCleanupComplete, softStep, runDbCleanupGate, makeGcEmptyServersStep } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
@@ -148,23 +148,19 @@ const deleteVolume: Step<DestroyInput, { ok: boolean; error?: string }> = {
     const app = db.getApp(ctx.input.appId);
     if (!app || !app.volume_id) return { ok: true };
     const r = await softStep(ctx, "delete_volume", async () => {
-      const compute = hetzner;
-      if (app.volume_attached) {
-        // Pre-existing volume attached via attach_existing_volume — it predates
-        // us and may hold data we don't own. DETACH only; never delete.
-        await compute.volumes?.detach(app.volume_id);
-      } else {
-        await compute.volumes?.detach(app.volume_id);
-        db.retireVolume({
-          providerVolumeId: app.volume_id,
-          formerResourceType: "app",
-          formerResourceId: app.id,
-          formerResourceName: app.name,
-          reason: `app destroy operation #${ctx.opId}`,
-          retentionClass: ctx.input.retentionClass ?? "user",
-        });
-        ctx.log(`Detached volume ${app.volume_id}; retained for recovery for 7 days`);
-      }
+      const serverId = db.getReplicas(app.id)[0]?.server_id;
+      const server = serverId == null ? undefined : db.getServer(serverId) ?? undefined;
+      await requireStorageDriver(app.volume_driver).detach(app.volume_id, server);
+      db.retireVolume({
+        providerVolumeId: app.volume_id,
+        driverId: app.volume_driver,
+        formerResourceType: "app",
+        formerResourceId: app.id,
+        formerResourceName: app.name,
+        reason: `app destroy operation #${ctx.opId}`,
+        retentionClass: ctx.input.retentionClass ?? "user",
+      });
+      ctx.log(`Detached volume ${app.volume_id}; retained for recovery for 7 days`);
     });
     return r.ok ? { ok: true } : { ok: false, error: r.error };
   },

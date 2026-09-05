@@ -29,7 +29,7 @@ import { insertPanel } from "../../shared/db/panel.ts";
 import { syncInternalHosts } from "./network-reconciler.ts";
 import { reconcileProxy, desiredProxyVersion, isProxyReady } from "./proxy-manager.ts";
 
-function makeServer(ipv4: string, privateIpv4: string) {
+function makeServer(ipv4: string, routingAddress: string) {
   return db.insertServer({
     name: `srv-nr-${randomSuffix()}`,
     provider_id: `h-nr-${randomSuffix()}`,
@@ -38,7 +38,7 @@ function makeServer(ipv4: string, privateIpv4: string) {
     type: "cx22",
     location: "fsn1",
     status: "ready",
-    private_ipv4: privateIpv4,
+    routing_address: routingAddress,
   });
 }
 

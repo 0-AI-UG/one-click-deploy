@@ -5,6 +5,9 @@
 export {
   sshExec,
   sshExecStreaming,
+  sshExecWithStdin,
+  buildSshArgs,
+  writeKnownHostsTmp,
   getSshKeyPath,
   getOrCreateLocalKeyPair,
   captureHostKey,
@@ -40,3 +43,7 @@ export {
   pruneServer,
   ensureHostLogPolicy,
 } from "../../engine/hetzner/containers.ts";
+
+export { dockerLoginRegistry, type RegistryAuth } from "../../engine/hetzner/registry.ts";
+export { asUser, DEFAULT_LOG_MAX_FILES, DEFAULT_LOG_MAX_SIZE } from "../../engine/hetzner/container-common.ts";
+export { inspectServerGc, garbageCollectServer } from "../../engine/hetzner/prune.ts";

@@ -79,7 +79,7 @@ function makeServer() {
     type: "cx22",
     location: "fsn1",
     status: "ready",
-    private_ipv4: "10.0.80.2",
+    routing_address: "10.0.80.2",
   });
 }
 

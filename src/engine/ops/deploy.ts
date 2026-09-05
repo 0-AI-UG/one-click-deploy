@@ -1,6 +1,5 @@
 import type { DeployRequest, Server } from "../../shared/rpc.ts";
 import dbInstance, * as db from "../../shared/db.ts";
-import { hetzner } from "../../shared/providers/index.ts";
 import { isNotFoundError } from "../../shared/providers/errors.ts";
 import {
   normalizeAppScaling,
@@ -23,14 +22,19 @@ import { replicaBindHost } from "../scale/types.ts";
 import { validateDeployRequest, assertSafeHostPath } from "../../shared/validate.ts";
 import { createMasker } from "../../shared/mask.ts";
 import { processIncomingEnvVars, serializeEnvVars, parseEnvVars, platformEnvVars, projectEnvVars } from "../../shared/env-crypto.ts";
-import { getProviderToken } from "../../shared/secret-store.ts";
+import { getInfrastructureToken } from "../../shared/secret-store.ts";
+import { defaultInfrastructureProvider } from "../../shared/infrastructure.ts";
 import { provisionServer } from "../provision-server.ts";
 import { registerOp } from "./registry.ts";
 import { FatalProbeError, type OpContext, type OpKindDefinition, type Step } from "../types.ts";
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
 import { scaleUp } from "../scale/scale-up.ts";
-import { assertConnectedStatelessWorkload, assertProviderVolumesSupported } from "../../shared/infrastructure.ts";
 import { commitManifestDeliverySource } from "../manifest-delivery-source.ts";
+import {
+  defaultStorageDriverForServer,
+  requireStorageDriver,
+  type StorageDriver,
+} from "../storage/index.ts";
 
 type DeployInput = DeployRequest;
 
@@ -45,6 +49,7 @@ type ServerOut = {
 
 type VolumeOut = {
   volumeId: string;
+  driverId: string;
   volumeMount: string;
   containerPath: string;
   attached: boolean;
@@ -72,9 +77,9 @@ function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [engine:deploy:${context}]`, ...args);
 }
 
-async function findVolumeByName(name: string) {
+async function findVolumeByName(driver: StorageDriver, server: NonNullable<ReturnType<typeof db.getServer>>, name: string) {
   try {
-    const all = await hetzner.volumes.list();
+    const all = await driver.list(server);
     return all.find((v) => v.name === name) ?? null;
   } catch (error) {
     throw new FatalProbeError(
@@ -89,7 +94,8 @@ export function appVolumeName(appName: string, opId: number): string {
 }
 
 async function deploymentMasker(input: DeployInput, userId: string, additionalSecrets: string[] = []) {
-  const providerToken = await getProviderToken();
+  const provider = defaultInfrastructureProvider(db.getSettings());
+  const providerToken = provider ? await getInfrastructureToken(provider.id) : "";
   const envVarValues = input.env_vars
     ? Array.isArray(input.env_vars)
       ? input.env_vars.map((e) => e.value)
@@ -162,10 +168,6 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
       if (!target || target.status !== "ready") {
         throw new Error("Target server not found or not ready");
       }
-      assertConnectedStatelessWorkload(target, {
-        managedVolume: (req.volume_size ?? 0) > 0 || !!req.volume_id,
-        hostMounts: (req.extra_volumes?.length ?? 0) > 0,
-      });
       const ingressIp = panelServerRow?.ipv4 || target.ipv4;
       return {
         serverId: target.id,
@@ -182,10 +184,6 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
       s.pool === desiredPool
     );
     if (existingReady) {
-      assertConnectedStatelessWorkload(existingReady, {
-        managedVolume: (req.volume_size ?? 0) > 0 || !!req.volume_id,
-        hostMounts: (req.extra_volumes?.length ?? 0) > 0,
-      });
       const ingressIp = panelServerRow?.ipv4 || existingReady.ipv4;
       return {
         serverId: existingReady.id,
@@ -237,18 +235,14 @@ const createVolume: Step<DeployInput, VolumeOut> = {
     const server = prior["pick_or_provision_server"] as ServerOut;
     const serverRow = db.getServer(server.serverId);
     if (!serverRow) throw new FatalProbeError(`Server ${server.serverId} not found`);
-    assertProviderVolumesSupported(serverRow);
-    const settings = db.getSettings();
-    let providerServerId = server.providerServerId;
-    if (!providerServerId) providerServerId = db.getServer(server.serverId)?.provider_id;
-    if (!providerServerId) return null;
-    const location = db.getServer(server.serverId)?.location || settings.default_location || "nbg1";
+    const driver = req.volume_driver
+      ? requireStorageDriver(req.volume_driver)
+      : defaultStorageDriverForServer(serverRow);
+    if (!driver.supports(serverRow)) throw new FatalProbeError(`Storage driver ${driver.id} does not support server ${serverRow.name}`);
+    const attachedServerId = driver.portable ? serverRow.provider_id : String(serverRow.id);
     if (req.volume_id) {
-      const info = await hetzner.volumes?.get(req.volume_id);
-      if (!info || info.serverId !== providerServerId) return null;
-      if (info.location && info.location !== location) {
-        throw new FatalProbeError(`Cannot adopt volume ${req.volume_id}: it is in ${info.location}, but the app server is in ${location}`);
-      }
+      const info = await driver.inspect(req.volume_id, serverRow).catch(() => null);
+      if (!info || info.attachedServerId !== attachedServerId) return null;
       if (info.sizeGb > req.volume_size) {
         throw new FatalProbeError(`Cannot shrink volume ${req.volume_id} from ${info.sizeGb}GB to ${req.volume_size}GB`);
       }
@@ -256,40 +250,41 @@ const createVolume: Step<DeployInput, VolumeOut> = {
       const containerPath = req.volume_path || "/data";
       return {
         volumeId: req.volume_id,
-        volumeMount: `/mnt/vol-${req.volume_id}:${containerPath}`,
+        driverId: driver.id,
+        volumeMount: `${info.hostPath}:${containerPath}`,
         containerPath,
         attached: true,
         detachOnCompensate: false,
       };
     }
     const volName = appVolumeName(req.app_name, ctx.opId);
-    const existing = await findVolumeByName(volName);
+    const existing = await findVolumeByName(driver, serverRow, volName);
     if (!existing) return null;
     const retired = db.getRetiredVolumes().find(
-      (row) => row.provider_volume_id === existing.providerId,
+      (row) => row.provider_volume_id === existing.id,
     );
     if (retired) {
       throw new FatalProbeError(
-        `Refusing to adopt retained volume ${existing.providerId} (${volName}); it belongs to ` +
+        `Refusing to adopt retained volume ${existing.id} (${volName}); it belongs to ` +
         `${retired.former_resource_type}:${retired.former_resource_name}.`,
       );
     }
     if (
       existing.sizeGb !== req.volume_size ||
-      existing.location !== location ||
-      (existing.serverId != null && existing.serverId !== providerServerId)
+      (existing.attachedServerId != null && existing.attachedServerId !== attachedServerId)
     ) {
       throw new FatalProbeError(
-        `Volume name collision for ${volName}: provider volume ${existing.providerId} ` +
+        `Volume name collision for ${volName}: storage volume ${existing.id} ` +
         "does not match requested size/location/server. Refusing implicit adoption.",
       );
     }
     const hostMountPath = `/mnt/${volName}`;
     const containerPath = req.volume_path || "/data";
-    ctx.log(`adopting existing volume ${existing.providerId} (${volName})`);
+    ctx.log(`adopting existing volume ${existing.id} (${volName})`);
     return {
-      volumeId: existing.providerId,
-      volumeMount: `${hostMountPath}:${containerPath}`,
+      volumeId: existing.id,
+      driverId: driver.id,
+      volumeMount: `${existing.hostPath || hostMountPath}:${containerPath}`,
       containerPath,
       attached: false,
       detachOnCompensate: true,
@@ -306,40 +301,29 @@ const createVolume: Step<DeployInput, VolumeOut> = {
     const server = prior["pick_or_provision_server"] as ServerOut;
     const volumeServer = db.getServer(server.serverId);
     if (!volumeServer) throw new Error(`Server ${server.serverId} not found`);
-    assertProviderVolumesSupported(volumeServer);
-    const settings = db.getSettings();
-    const compute = hetzner;
-    if (!compute.volumes) {
-      throw new Error(`Provider "${compute.name}" does not support managed volumes`);
-    }
-
-    let providerServerId = server.providerServerId;
-    if (!providerServerId) {
-      const existingServer = db.getServer(server.serverId);
-      if (!existingServer) throw new Error(`Server ${server.serverId} not found`);
-      providerServerId = existingServer.provider_id;
-    }
+    const driver = req.volume_driver
+      ? requireStorageDriver(req.volume_driver)
+      : defaultStorageDriverForServer(volumeServer);
+    if (!driver.supports(volumeServer)) throw new Error(`Storage driver ${driver.id} does not support server ${volumeServer.name}`);
+    const attachedServerId = driver.portable ? volumeServer.provider_id : String(volumeServer.id);
 
     if (req.volume_id) {
-      const info = await compute.volumes.get(req.volume_id);
-      const serverLocation = db.getServer(server.serverId)?.location || settings.default_location || "nbg1";
-      if (info.location && info.location !== serverLocation) {
-        throw new Error(`Cannot adopt volume ${req.volume_id}: it is in ${info.location}, but the app server is in ${serverLocation}`);
-      }
-      if (info.serverId && info.serverId !== providerServerId) {
+      const info = await driver.inspect(req.volume_id, volumeServer);
+      if (info.attachedServerId && info.attachedServerId !== attachedServerId) {
         throw new Error(`Cannot adopt volume ${req.volume_id}: it is attached to another server`);
       }
       if (info.sizeGb > req.volume_size) {
         throw new Error(`Cannot shrink volume ${req.volume_id} from ${info.sizeGb}GB to ${req.volume_size}GB`);
       }
-      if (info.sizeGb < req.volume_size) await compute.volumes.resize(req.volume_id, req.volume_size);
-      const wasDetached = !info.serverId;
-      if (wasDetached) await compute.volumes.attach(req.volume_id, providerServerId);
+      if (info.sizeGb > 0 && info.sizeGb < req.volume_size) await driver.resize(req.volume_id, req.volume_size, volumeServer);
+      const wasDetached = !info.attachedServerId;
+      if (wasDetached) await driver.attach(req.volume_id, volumeServer);
       const containerPath = req.volume_path || "/data";
       ctx.log(`Adopted volume ${req.volume_id} (${req.volume_size}GB at ${containerPath})`);
       return {
         volumeId: req.volume_id,
-        volumeMount: `/mnt/vol-${req.volume_id}:${containerPath}`,
+        driverId: driver.id,
+        volumeMount: `${info.hostPath}:${containerPath}`,
         containerPath,
         attached: true,
         detachOnCompensate: wasDetached,
@@ -347,37 +331,40 @@ const createVolume: Step<DeployInput, VolumeOut> = {
     }
 
     const volName = appVolumeName(req.app_name, ctx.opId);
-    const vol = await compute.volumes.create({
+    const vol = await driver.create({
+      server: volumeServer,
       name: volName,
       sizeGb: req.volume_size,
-      serverId: providerServerId,
-      location: settings.default_location || "nbg1",
     });
-    const hostMountPath = `/mnt/${volName}`;
+    const hostMountPath = vol.hostPath;
     const containerPath = req.volume_path || "/data";
     // Host bind-mount setup happens in a later step (setup_volume_bind_mount)
     // once we have an app.id to tag the fstab block with.
     ctx.log(`Volume ready (${req.volume_size}GB at ${containerPath})`);
     return {
-      volumeId: vol.providerId,
+      volumeId: vol.id,
+      driverId: driver.id,
       volumeMount: `${hostMountPath}:${containerPath}`,
       containerPath,
       attached: false,
       detachOnCompensate: true,
     };
   },
-  async compensate(ctx, out) {
+  async compensate(ctx, out, prior) {
     if (!out) return;
     if (!out.detachOnCompensate) {
       ctx.log(`Preserved pre-existing attachment for volume ${out.volumeId}`);
       return;
     }
-    const compute = hetzner;
-    try { await compute.volumes?.detach(out.volumeId); } catch (err) {
+    const picked = prior["pick_or_provision_server"] as ServerOut | undefined;
+    const server = picked ? db.getServer(picked.serverId) ?? undefined : undefined;
+    const driver = requireStorageDriver(out.driverId);
+    try { await driver.detach(out.volumeId, server); } catch (err) {
       if (!isNotFoundError(err)) throw err;
     }
     db.retireVolume({
       providerVolumeId: out.volumeId,
+      driverId: out.driverId,
       formerResourceType: "app",
       formerResourceId: 0,
       formerResourceName: ctx.input.app_name || "unknown-app",
@@ -543,6 +530,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           desired_volume_id: req.volume_id ?? "",
           desired_volume_size: req.volume_size ?? 0,
           desired_volume_path: req.volume_path ?? "/data",
+          desired_volume_driver: volume?.driverId ?? req.volume_driver ?? "",
           command: req.command,
           cap_add: req.cap_add,
           post_start_command: req.post_start_command,
@@ -562,7 +550,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
         scale_to_zero_after: scaling.scale_to_zero_after,
       });
       if (volume) {
-        db.updateAppVolume(result.app.id, volume.volumeId, volume.volumeMount, volume.attached);
+        db.updateAppVolume(result.app.id, volume.volumeId, volume.volumeMount, volume.attached, volume.driverId);
         if (volume.attached) db.deleteRetiredVolume(volume.volumeId);
       }
       if (extraVolumes.length > 0) {
@@ -609,20 +597,21 @@ const setupVolumeBindMount: Step<DeployInput, { ok: true }> = {
     const appOut = prior["insert_app_row"] as InsertAppOut;
 
     const hostMountPath = volume.volumeMount.split(":")[0];
-    const { ensureVolumeBindMount } = await import("../hetzner/host-mounts.ts");
-    // Hetzner's automount can lag a few seconds after volume create; retry
+    const serverRow = db.getServer(server.serverId);
+    if (!serverRow) throw new Error(`Server ${server.serverId} not found`);
+    const driver = requireStorageDriver(volume.driverId);
+    // Provider mounts can settle asynchronously after volume creation; retry
     // a small handful of times before giving up.
     let lastErr: unknown = null;
     for (let i = 0; i < 5; i++) {
       try {
-        await ensureVolumeBindMount({
-          serverIp: server.serverIp,
-          hostKey: server.serverHostKey || undefined,
-          hetznerVolumeId: volume.volumeId,
-          hostMountPath,
+        await driver.ensureMount({
+          server: serverRow,
+          volumeId: volume.volumeId,
+          hostPath: hostMountPath,
           blockName: `app-${appOut.appId}`,
         });
-        ctx.log(`Bind mount ready: ${hostMountPath} -> /mnt/HC_Volume_${volume.volumeId}`);
+        ctx.log(`Storage mount ready: ${hostMountPath} (${driver.id})`);
         return { ok: true };
       } catch (err) {
         lastErr = err;
@@ -633,11 +622,10 @@ const setupVolumeBindMount: Step<DeployInput, { ok: true }> = {
     // compensate hook. Remove any partially-written fstab/bind state inline
     // before earlier steps detach/retire the provider volume.
     try {
-      const { removeVolumeBindMount } = await import("../hetzner/host-mounts.ts");
-      await removeVolumeBindMount({
-        serverIp: server.serverIp,
-        hostKey: server.serverHostKey || undefined,
-        hostMountPath,
+      await driver.removeMount({
+        server: serverRow,
+        volumeId: volume.volumeId,
+        hostPath: hostMountPath,
         blockName: `app-${appOut.appId}`,
       });
     } catch (rollbackError) {
@@ -656,11 +644,12 @@ const setupVolumeBindMount: Step<DeployInput, { ok: true }> = {
     if (!server || !appOut) return;
     const hostMountPath = volume.volumeMount.split(":")[0];
     try {
-      const { removeVolumeBindMount } = await import("../hetzner/host-mounts.ts");
-      await removeVolumeBindMount({
-        serverIp: server.serverIp,
-        hostKey: server.serverHostKey || undefined,
-        hostMountPath,
+      const serverRow = db.getServer(server.serverId);
+      if (!serverRow) return;
+      await requireStorageDriver(volume.driverId).removeMount({
+        server: serverRow,
+        volumeId: volume.volumeId,
+        hostPath: hostMountPath,
         blockName: `app-${appOut.appId}`,
       });
     } catch (err) {

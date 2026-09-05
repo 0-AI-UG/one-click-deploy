@@ -125,7 +125,7 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
           "adopt",
           "attach_existing_volume",
           [`app:${app.id}`, `volume:${desiredId}`],
-          { appId: app.id, volumeId: desiredId, mountPath: desiredPath },
+          { appId: app.id, volumeId: desiredId, mountPath: desiredPath, driverId: app.desired_volume_driver || undefined },
         ));
       } else {
         childOpIds.push(await runChild(
@@ -133,7 +133,7 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
           "create",
           "attach_volume",
           [`app:${app.id}`],
-          { appId: app.id, sizeGb: desiredSize, mountPath: desiredPath },
+          { appId: app.id, sizeGb: desiredSize, mountPath: desiredPath, driverId: app.desired_volume_driver || undefined },
         ));
       }
       app = db.getApp(ctx.input.appId)!;
@@ -145,7 +145,7 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
         "resize",
         "resize_volume",
         [`volume:${app.volume_id}`],
-        { volumeId: app.volume_id, sizeGb: desiredSize },
+        { volumeId: app.volume_id, sizeGb: desiredSize, driverId: app.volume_driver },
       ));
       app = db.getApp(ctx.input.appId)!;
       if (containerMountPath(app.volume_mount) !== desiredPath) {

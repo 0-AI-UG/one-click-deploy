@@ -1,16 +1,14 @@
 import { getSettings } from "../../shared/db.ts";
-import { secretStore } from "../../shared/secret-store.ts";
+import { getInfrastructureToken } from "../../shared/secret-store.ts";
 import { withRetry, isRetryableHttpError } from "../../shared/retry.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
 
-/** The Hetzner infrastructure API token (secret store, settings fallback). */
+/** The Hetzner adapter credential. */
 export async function hetznerApiToken(): Promise<string> {
-  const token = await secretStore.get("hetzner_api_token");
-  if (token) return token;
-  return getSettings().hetzner_api_token ?? "";
+  return getInfrastructureToken("hetzner");
 }
 
 function friendlyHetznerError(status: number, body: string, method: string, apiPath: string): string {

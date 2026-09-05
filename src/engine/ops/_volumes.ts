@@ -1,17 +1,23 @@
 import * as db from "../../shared/db.ts";
-import {
-  ensureVolumeBindMount as realEnsure,
-  removeVolumeBindMount as realRemove,
-} from "../hetzner/host-mounts.ts";
+import { requireStorageDriver } from "../storage/index.ts";
 
-let _ensureVolumeBindMount = realEnsure;
-let _removeVolumeBindMount = realRemove;
-/** Test-only seam. */
-export function __setBindImplForTest(impl: { ensureVolumeBindMount?: typeof realEnsure; removeVolumeBindMount?: typeof realRemove }) {
-  if (impl.ensureVolumeBindMount) _ensureVolumeBindMount = impl.ensureVolumeBindMount;
-  if (impl.removeVolumeBindMount) _removeVolumeBindMount = impl.removeVolumeBindMount;
+type EnsureOpts = Parameters<ReturnType<typeof requireStorageDriver>["ensureMount"]>[0];
+type RemoveOpts = Parameters<ReturnType<typeof requireStorageDriver>["removeMount"]>[0];
+let testEnsure: ((opts: EnsureOpts) => Promise<void>) | undefined;
+let testRemove: ((opts: RemoveOpts) => Promise<void>) | undefined;
+
+/** Test-only seam around the provider-neutral mount boundary. */
+export function __setBindImplForTest(impl: {
+  ensureVolumeBindMount?: (opts: any) => Promise<void>;
+  removeVolumeBindMount?: (opts: any) => Promise<void>;
+}) {
+  if (impl.ensureVolumeBindMount) testEnsure = impl.ensureVolumeBindMount;
+  if (impl.removeVolumeBindMount) testRemove = impl.removeVolumeBindMount;
 }
-export function __resetBindImplForTest() { _ensureVolumeBindMount = realEnsure; _removeVolumeBindMount = realRemove; }
+export function __resetBindImplForTest() {
+  testEnsure = undefined;
+  testRemove = undefined;
+}
 
 // Shared helpers for the volume-management ops (attach / attach-existing /
 // detach / reattach). These mirror the exact host-mount + precondition
@@ -60,47 +66,53 @@ export function loadSingleReplicaTarget(
 }
 
 /**
- * Set up the host bind mount for a volume. On Hetzner we wait for the automount
- * to settle then layer the fstab-persisted bind (mirrors the routes' 3s sleep +
- * ensureVolumeBindMount). On other providers we just create the mount dir.
- * Idempotent: safe to replay after a crash.
+ * Set up the host bind mount through the selected storage driver. Idempotent:
+ * safe to replay after a crash.
  */
 export async function ensureBindMount(opts: {
-  serverIp: string;
-  hostKey: string;
+  serverId: number;
+  driverId: string;
   volumeId: string;
   hostMountPath: string;
   appId: number;
 }): Promise<void> {
-  await Bun.sleep(3000);
-  await _ensureVolumeBindMount({
-    serverIp: opts.serverIp,
-    hostKey: opts.hostKey || undefined,
-    hetznerVolumeId: opts.volumeId,
-    hostMountPath: opts.hostMountPath,
+  const server = db.getServer(opts.serverId);
+  if (!server) throw new Error("Server not found");
+  const input = {
+    server,
+    volumeId: opts.volumeId,
+    hostPath: opts.hostMountPath,
     blockName: `app-${opts.appId}`,
-  });
+  };
+  if (testEnsure) await testEnsure(input);
+  else await requireStorageDriver(opts.driverId).ensureMount(input);
 }
 
 /** Teardown of a host bind mount. Idempotent, but surfaces SSH failures. */
 export async function removeBindMount(opts: {
-  serverIp: string;
-  hostKey: string;
+  serverId: number;
+  driverId: string;
+  volumeId: string;
   hostMountPath: string;
   appId: number;
 }): Promise<void> {
-  await _removeVolumeBindMount({
-    serverIp: opts.serverIp,
-    hostKey: opts.hostKey || undefined,
-    hostMountPath: opts.hostMountPath,
+  const server = db.getServer(opts.serverId);
+  if (!server) throw new Error("Server not found");
+  const input = {
+    server,
+    volumeId: opts.volumeId,
+    hostPath: opts.hostMountPath,
     blockName: `app-${opts.appId}`,
-  });
+  };
+  if (testRemove) await testRemove(input);
+  else await requireStorageDriver(opts.driverId).removeMount(input);
 }
 
-/** Best-effort teardown of a host bind mount (Hetzner only; never throws). */
+/** Best-effort teardown of a host bind mount (never throws). */
 export async function removeBindMountBestEffort(opts: {
-  serverIp: string;
-  hostKey: string;
+  serverId: number;
+  driverId: string;
+  volumeId: string;
   hostMountPath: string;
   appId: number;
 }): Promise<void> {

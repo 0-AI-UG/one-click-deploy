@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
-import { hetzner } from "../../shared/providers/index.ts";
 import { recreateAppContainer } from "../deploy/index.ts";
-import { removeVolumeBindMount } from "../hetzner/host-mounts.ts";
+import { requireStorageDriver } from "../storage/index.ts";
+import { removeBindMount as removeStorageMount } from "./_volumes.ts";
 import { registerOp } from "./registry.ts";
 import { assertCleanupComplete, softStep } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
@@ -16,9 +16,9 @@ type DetachVolumeInput = { appId: number };
 
 type ValidateOut = {
   volumeId: string;
+  driverId: string;
   hostMountPath: string;
-  serverIp: string;
-  hostKey: string;
+  serverId: number | null;
   hasServer: boolean;
   extraVolumes: string;
   appName: string;
@@ -33,14 +33,14 @@ const validate: Step<DetachVolumeInput, ValidateOut> = {
     if (!app.volume_id) throw new Error("App has no volume attached");
     const reps = db.getReplicas(ctx.input.appId);
     const server = reps[0] ? db.getServer(reps[0].server_id) : null;
-    // Tear down the bind mount before Hetzner pulls the device so we don't
+    // Tear down the bind mount before the storage driver pulls the device so we don't
     // leave a dangling /mnt/ocd-*-data behind.
     const hostMountPath = app.volume_mount?.split(":")[0] || `/mnt/ocd-${app.name}-data`;
     return {
       volumeId: app.volume_id,
+      driverId: app.volume_driver,
       hostMountPath,
-      serverIp: server?.ipv4 || "",
-      hostKey: server?.ssh_host_key || "",
+      serverId: server?.id ?? null,
       hasServer: !!server,
       extraVolumes: app.extra_volumes,
       appName: app.name,
@@ -53,13 +53,14 @@ const removeBindMount: Step<DetachVolumeInput, { ok: boolean }> = {
   label: "Remove bind mount",
   async run(ctx, prior) {
     const v = prior["validate"] as ValidateOut;
-    if (!v.hasServer) return { ok: true };
+    if (!v.hasServer || v.serverId == null) return { ok: true };
     const r = await softStep(ctx, "remove_bind_mount", async () => {
-      await removeVolumeBindMount({
-        serverIp: v.serverIp,
-        hostKey: v.hostKey || undefined,
+      await removeStorageMount({
+        serverId: v.serverId!,
+        driverId: v.driverId,
+        volumeId: v.volumeId,
         hostMountPath: v.hostMountPath,
-        blockName: `app-${ctx.input.appId}`,
+        appId: ctx.input.appId,
       });
     });
     return { ok: r.ok };
@@ -71,14 +72,19 @@ const detachVolume: Step<DetachVolumeInput, { ok: true }> = {
   label: "Detach volume",
   async run(ctx, prior) {
     const v = prior["validate"] as ValidateOut;
-    const before = await hetzner.volumes.get(v.volumeId);
-    if (before.serverId != null) await hetzner.volumes.detach(v.volumeId);
-    const after = await hetzner.volumes.get(v.volumeId);
-    if (after.serverId != null) {
-      throw new Error(`Provider did not confirm that volume ${v.volumeId} was detached`);
+    const driver = requireStorageDriver(v.driverId);
+    const server = v.serverId == null ? undefined : db.getServer(v.serverId) ?? undefined;
+    const before = await driver.inspect(v.volumeId, server);
+    if (before.attachedServerId != null) await driver.detach(v.volumeId, server);
+    if (driver.portable) {
+      const after = await driver.inspect(v.volumeId, server);
+      if (after.attachedServerId != null) {
+        throw new Error(`Storage driver did not confirm that volume ${v.volumeId} was detached`);
+      }
     }
     db.retireVolume({
       providerVolumeId: v.volumeId,
+      driverId: v.driverId,
       formerResourceType: "app",
       formerResourceId: ctx.input.appId,
       formerResourceName: v.appName,

@@ -1,6 +1,6 @@
 import * as db from "../shared/db.ts";
-import { secretStore } from "../shared/secret-store.ts";
-import { hetzner } from "../shared/providers/index.ts";
+import { getInfrastructureToken, secretStore } from "../shared/secret-store.ts";
+import { defaultInfrastructureProvider } from "../shared/infrastructure.ts";
 import { probeBuildWorker } from "./build-worker.ts";
 import { imageMatchesRegistryScope } from "./registry-config.ts";
 import { repositoryHost } from "./source-config.ts";
@@ -49,7 +49,8 @@ export async function inspectDeployReadiness(input: {
 } = {}): Promise<DeployReadiness> {
   const buildDelivery = !!input.repository;
   const settings = db.getSettings();
-  const providerConfigured = !!await secretStore.get(hetzner.tokenKey).catch(() => null);
+  const provider = defaultInfrastructureProvider(settings);
+  const providerConfigured = !!provider && !!await getInfrastructureToken(provider.id).catch(() => "");
   const workers = buildDelivery ? db.getBuildWorkers() : [];
   let online = 0;
   for (const worker of workers) {

@@ -2,7 +2,7 @@ import { corsHeaders } from "../lib/cors.ts";
 import { appScope, requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
-import { inspectServerGc } from "../../engine/hetzner/prune.ts";
+import { inspectServerGc } from "../../shared/remote/index.ts";
 
 export function selectCurrentAndRollback<T extends {
   id: number;

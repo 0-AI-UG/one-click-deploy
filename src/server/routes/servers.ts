@@ -111,7 +111,7 @@ export async function handleGetServerEnrollmentKey(request: Request): Promise<Re
 type ConnectServerBody = {
   name?: unknown;
   management_address?: unknown;
-  private_ipv4?: unknown;
+  routing_address?: unknown;
   ssh_host_key?: unknown;
   ssh_user?: unknown;
   ssh_port?: unknown;
@@ -123,12 +123,6 @@ export function isIpv4(value: string): boolean {
   return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
 }
 
-export function isPrivateIpv4(value: string): boolean {
-  if (!isIpv4(value)) return false;
-  const [a, b] = value.split(".").map(Number);
-  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
-}
-
 export function isPinnedEd25519HostKey(address: string, hostKey: string): boolean {
   if (hostKey.includes("\n") || hostKey.includes("\r")) return false;
   const [host, keyType, keyData, ...extra] = hostKey.trim().split(/\s+/);
@@ -136,7 +130,7 @@ export function isPinnedEd25519HostKey(address: string, hostKey: string): boolea
     typeof keyData === "string" && keyData.length >= 40 && /^[A-Za-z0-9+/]+={0,2}$/.test(keyData);
 }
 
-/** Connect an operator-owned stateless Docker host. The operator first
+/** Connect an operator-owned Docker host. The operator first
  * installs OCD's enrollment key and supplies a separately verified host key;
  * OCD deliberately never trusts a first-seen key for external machines. */
 export async function handleConnectServer(request: Request): Promise<Response> {
@@ -145,7 +139,7 @@ export async function handleConnectServer(request: Request): Promise<Response> {
     const body = await request.json() as ConnectServerBody;
     const name = String(body.name ?? "").trim();
     const address = String(body.management_address ?? "").trim();
-    const privateIpv4 = String(body.private_ipv4 ?? "").trim();
+    const routingAddress = String(body.routing_address ?? "").trim();
     const hostKey = String(body.ssh_host_key ?? "").trim();
     const sshUser = String(body.ssh_user ?? "root").trim();
     const sshPort = Number(body.ssh_port ?? 22);
@@ -159,8 +153,8 @@ export async function handleConnectServer(request: Request): Promise<Response> {
     if (!isIpv4(address)) {
       return Response.json({ error: "management_address must currently be an IPv4 address" }, { status: 400, headers: corsHeaders });
     }
-    if (!isPrivateIpv4(privateIpv4)) {
-      return Response.json({ error: "private_ipv4 must be an RFC1918 IPv4 address present on the host" }, { status: 400, headers: corsHeaders });
+    if (!isIpv4(routingAddress)) {
+      return Response.json({ error: "routing_address must be an IPv4 address present on the host" }, { status: 400, headers: corsHeaders });
     }
     if (sshUser !== "root" || sshPort !== 22) {
       return Response.json({ error: "connected hosts currently require ssh_user=root and ssh_port=22" }, { status: 400, headers: corsHeaders });
@@ -191,25 +185,25 @@ export async function handleConnectServer(request: Request): Promise<Response> {
         { status: 400, headers: corsHeaders },
       );
     }
-    if (!probe.stdout.split(/\s+/).includes(privateIpv4)) {
+    if (!probe.stdout.split(/\s+/).includes(routingAddress)) {
       return Response.json(
-        { error: `Host does not report private address ${privateIpv4}; refusing an unreachable fleet route` },
+        { error: `Host does not report routing address ${routingAddress}; refusing an unreachable fleet route` },
         { status: 400, headers: corsHeaders },
       );
     }
-    // Re-bind the independently verified key material to the private address,
+    // Re-bind the independently verified key material to the fleet route,
     // then prove the panel itself can reach that route without TOFU.
     const [, keyType, keyData] = hostKey.split(/\s+/);
-    const privateHostKey = `${privateIpv4} ${keyType} ${keyData}`;
+    const privateHostKey = `${routingAddress} ${keyType} ${keyData}`;
     const privateProbe = await sshExec(
-      privateIpv4,
+      routingAddress,
       "true",
       privateHostKey,
       { user: sshUser, port: sshPort },
     );
     if (privateProbe.exitCode !== 0) {
       return Response.json(
-        { error: `Panel cannot reach ${privateIpv4} over the verified private SSH route` },
+        { error: `Panel cannot reach ${routingAddress} over the verified SSH route` },
         { status: 400, headers: corsHeaders },
       );
     }
@@ -217,11 +211,11 @@ export async function handleConnectServer(request: Request): Promise<Response> {
     const server = db.insertServer({
       name,
       provider_id: "",
-      provider: "external",
+      provider: "",
       ownership: "connected",
       ipv4: address,
       ipv6: "",
-      private_ipv4: privateIpv4,
+      routing_address: routingAddress,
       management_address: address,
       ssh_user: sshUser,
       ssh_port: sshPort,

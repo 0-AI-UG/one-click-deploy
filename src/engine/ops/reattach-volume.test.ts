@@ -30,6 +30,7 @@ const realSleep = Bun.sleep;
 (Bun as any).sleep = () => Promise.resolve();
 
 import * as db from "../../shared/db.ts";
+import { __replaceInfrastructureProvidersForTest } from "../../shared/providers/registry.ts";
 import reattachVolumeOp from "./reattach-volume.ts";
 import { __setBindImplForTest, __resetBindImplForTest } from "./_volumes.ts";
 
@@ -78,7 +79,7 @@ function makeApp(location: string, withVolume: string | null, connected = false)
     { name, domain: `${name}.example.com`, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", container_port: 3000, env_vars: "{}" },
     server.id,
   );
-  if (withVolume) db.updateAppVolume(app.id, withVolume, `/mnt/ocd-${name}-data:/old`, true);
+  if (withVolume) db.updateAppVolume(app.id, withVolume, `/mnt/ocd-${name}-data:/old`, true, "hetzner-block");
   return { server, app: db.getApp(app.id)! };
 }
 
@@ -89,6 +90,7 @@ async function validateFor(from: ReturnType<typeof makeApp>, to: ReturnType<type
 }
 
 beforeEach(() => {
+  __replaceInfrastructureProvidersForTest([compute]);
   observedProviderServerId = null;
   compute._mocks.volumeAttach.mockClear();
   compute._mocks.volumeDetach.mockClear();
@@ -126,7 +128,7 @@ describe("reattach_volume: validate", () => {
     const from = makeApp("fsn1", "v-1");
     const to = makeApp("fsn1", null, true);
     const { ctx } = makeCtx({ volumeId: "v-1", fromAppId: from.app.id, toAppId: to.app.id });
-    expect(stepByName("validate").run(ctx, {})).rejects.toThrow(/externally connected/);
+    expect(stepByName("validate").run(ctx, {})).rejects.toThrow(/does not support both servers/);
   });
 
   test("rejects a source that does not own the requested volume", async () => {

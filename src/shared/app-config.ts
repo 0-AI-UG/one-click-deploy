@@ -19,7 +19,7 @@ const RUNTIME_CONFIG_FIELDS = new Set([
   "container_port", "environment_id", "env_projection", "memory_mb", "cpu_limit",
   "health_check", "health_check_mode", "health_check_command", "health_check_file",
   "health_check_max_age_seconds", "health_check_expected_statuses", "internal_protocol",
-  "extra_volumes", "desired_volume_id", "desired_volume_size", "desired_volume_path",
+  "extra_volumes", "desired_volume_id", "desired_volume_size", "desired_volume_path", "desired_volume_driver",
   "command", "cap_add", "post_start_command",
 ]);
 
@@ -250,6 +250,7 @@ function normalizedSpec(req: DeployRequest) {
     desired_volume_id: req.volume_id ?? "",
     desired_volume_size: req.volume_size ?? 0,
     desired_volume_path: req.volume_path ?? "/data",
+    desired_volume_driver: req.volume_driver ?? "",
     command: req.command ?? [],
     cap_add: req.cap_add ?? [],
     post_start_command: req.post_start_command ?? "",
@@ -302,6 +303,7 @@ function comparableApp(app: AppRow) {
     desired_volume_id: app.desired_volume_id || "",
     desired_volume_size: app.desired_volume_size ?? 0,
     desired_volume_path: app.desired_volume_path || "/data",
+    desired_volume_driver: app.desired_volume_driver || "",
     command: db.parseAppCommand(app),
     cap_add: db.parseAppCapabilities(app),
     post_start_command: app.post_start_command || "",
@@ -356,6 +358,7 @@ export function deployRequestFromApp(app: AppRow): DeployRequest {
     volume_id: app.desired_volume_id,
     volume_size: app.desired_volume_size,
     volume_path: app.desired_volume_path,
+    volume_driver: app.desired_volume_driver || undefined,
     command: current.command,
     cap_add: current.cap_add,
     post_start_command: current.post_start_command,
@@ -488,11 +491,12 @@ export async function applyAppConfig(
       postStartCommand: desired.post_start_command,
     });
   }
-  if (["desired_volume_id", "desired_volume_size", "desired_volume_path"].some((f) => changed.has(f))) {
+  if (["desired_volume_id", "desired_volume_size", "desired_volume_path", "desired_volume_driver"].some((f) => changed.has(f))) {
     db.updateAppDesiredVolume(app.id, {
       volumeId: desired.desired_volume_id,
       sizeGb: desired.desired_volume_size,
       mountPath: desired.desired_volume_path,
+      driverId: desired.desired_volume_driver,
     });
   }
   if (["durability_class", "max_per_host", "min_locations"].some((f) => changed.has(f))) {

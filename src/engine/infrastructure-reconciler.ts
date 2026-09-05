@@ -1,11 +1,11 @@
 import * as db from "../shared/db.ts";
-import { hetzner } from "../shared/providers/index.ts";
 import { isNotFoundError } from "../shared/providers/errors.ts";
 import { ensureNetwork as ensureSharedNetwork } from "./network.ts";
-import { bindMountStatus, ensureVolumeBindMount } from "./hetzner/host-mounts.ts";
+import { requireStorageDriver } from "./storage/index.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "./scheduler.ts";
-import { isManagedHetznerServer, serverCapabilities } from "../shared/infrastructure.ts";
-import { secretStore } from "../shared/secret-store.ts";
+import { infrastructureProviderForServer, isManagedServer } from "../shared/infrastructure.ts";
+import { getInfrastructureToken } from "../shared/secret-store.ts";
+import type { InfrastructureProvider } from "../shared/providers/contracts.ts";
 
 function log(context: string, ...args: unknown[]): void {
   console.log(`[${new Date().toISOString()}] [infra-reconciler:${context}]`, ...args);
@@ -27,26 +27,22 @@ function serverHasReferences(serverId: number): boolean {
 /** Observe provider truth, repair private-network attachment, and make a
  * confirmed missing server unavailable to schedulers and routing. */
 export async function reconcileServersAndNetwork(): Promise<void> {
-  const managedServers = db.getServers().filter((server) => isManagedHetznerServer(server) && server.provider_id);
+  const managedServers = db.getServers().filter((server) => isManagedServer(server) && server.provider_id);
   if (managedServers.length === 0) return;
-  if (!await secretStore.get(hetzner.tokenKey).catch(() => null)) return;
-  let networkId = "";
-  if (hetzner.networks) {
-    try {
-      networkId = await ensureSharedNetwork();
-    } catch (error) {
-      // Server liveness is independent of private-network control-plane
-      // health. Keep observing provider truth even when network repair is
-      // temporarily unavailable.
-      log("network", `shared network reconciliation failed: ${error}`);
-    }
-  }
   for (const snapshot of managedServers) {
     await withLock([`server:${snapshot.id}`], "reconcile:server", async () => {
       const server = db.getServer(snapshot.id);
       if (!server) return;
+      const provider = infrastructureProviderForServer(server);
+      if (!await getInfrastructureToken(provider.id).catch(() => "")) return;
+      let networkId = "";
+      if (provider.networks) try {
+        networkId = await ensureSharedNetwork(provider);
+      } catch (error) {
+        log("network", `${provider.name} shared network reconciliation failed: ${error}`);
+      }
       try {
-        const observed = await hetzner.getServer(server.provider_id);
+        const observed = await provider.getServer(server.provider_id);
         const available = observed.status === "running";
         db.recordServerObservation(server.id, {
           providerStatus: observed.status,
@@ -60,17 +56,17 @@ export async function reconcileServersAndNetwork(): Promise<void> {
           db.updateServerStatus(server.id, "unavailable");
           for (const replica of db.getReplicasByServer(server.id)) db.updateReplicaStatus(replica.id, "unhealthy");
         }
-        if (!networkId || !hetzner.networks) return;
+        if (!networkId || !provider.networks) return;
         try {
-          let privateIpv4 = await hetzner.networks.getPrivateIpv4(server.provider_id, networkId);
-          if (!privateIpv4) {
+          let routingAddress = await provider.networks.getPrivateIpv4(server.provider_id, networkId);
+          if (!routingAddress) {
             // The provider authoritatively reports detachment. Stop routing to
             // the cached address before attempting repair.
-            db.updateServer(server.id, { private_ipv4: "" });
-            await hetzner.networks.attachServer(server.provider_id, networkId);
-            privateIpv4 = await hetzner.networks.getPrivateIpv4(server.provider_id, networkId);
+            db.updateServer(server.id, { routing_address: "" });
+            await provider.networks.attachServer(server.provider_id, networkId);
+            routingAddress = await provider.networks.getPrivateIpv4(server.provider_id, networkId);
           }
-          if (privateIpv4) db.updateServer(server.id, { private_ipv4: privateIpv4 });
+          if (routingAddress) db.updateServer(server.id, { routing_address: routingAddress });
         } catch (networkError) {
           log("network", `${server.name}: attachment reconciliation failed: ${networkError}`);
         }
@@ -93,17 +89,18 @@ export async function reconcileServersAndNetwork(): Promise<void> {
 /** Continuously reassert both firewall rules and server attachments. */
 export async function reconcileFirewall(): Promise<void> {
   const servers = db.getServers().filter((server) =>
-    isManagedHetznerServer(server) && server.provider_id && server.status !== "cleanup_failed"
+    isManagedServer(server) && server.provider_id && server.status !== "cleanup_failed"
   );
   if (servers.length === 0) return;
-  if (!await secretStore.get(hetzner.tokenKey).catch(() => null)) return;
-  const firewallId = await hetzner.ensureFirewall();
   await Promise.all(servers.map(async (server) => {
     try {
+      const provider = infrastructureProviderForServer(server);
+      if (!provider.capabilities.firewall || !await getInfrastructureToken(provider.id).catch(() => "")) return;
+      const firewallId = await provider.ensureFirewall();
       await withLock(
         [`server:${server.id}`],
         "reconcile:firewall",
-        () => hetzner.ensureFirewallAttached(firewallId, server.provider_id),
+        () => provider.ensureFirewallAttached(firewallId, server.provider_id),
       );
     } catch (error) {
       log("firewall", `${server.name}: attachment reconciliation failed: ${error}`);
@@ -114,7 +111,7 @@ export async function reconcileFirewall(): Promise<void> {
 /** Finish requested server GC only after a complete reference recheck and a
  * successful/idempotent provider deletion. */
 export async function reconcileServerGc(
-  provider: Pick<typeof hetzner, "deleteServer"> = hetzner,
+  providerOverride?: Pick<InfrastructureProvider, "deleteServer">,
 ): Promise<void> {
   for (const snapshot of db.getServers().filter((server) => !!server.gc_requested_at)) {
     await withLock([`server:${snapshot.id}`], "reconcile:server-gc", async () => {
@@ -125,8 +122,12 @@ export async function reconcileServerGc(
         return;
       }
       try {
-        if (isManagedHetznerServer(server) && server.provider_id) {
-          if (provider === hetzner && !await secretStore.get(hetzner.tokenKey).catch(() => null)) return;
+        if (isManagedServer(server) && server.provider_id) {
+          const provider = providerOverride ?? infrastructureProviderForServer(server);
+          if (!providerOverride) {
+            const registered = infrastructureProviderForServer(server);
+            if (!await getInfrastructureToken(registered.id).catch(() => "")) return;
+          }
           await provider.deleteServer(server.provider_id);
         }
       } catch (error) {
@@ -144,6 +145,7 @@ export async function reconcileServerGc(
 type VolumeOwner = {
   key: string;
   volumeId: string;
+  driverId: string;
   serverId: number;
   hostMountPath: string;
   blockName: string;
@@ -161,6 +163,7 @@ function activeVolumeOwners(): VolumeOwner[] {
     owners.push({
       key: `app:${app.id}`,
       volumeId: app.volume_id,
+      driverId: app.volume_driver,
       serverId: replica.server_id,
       hostMountPath: app.volume_mount.split(":")[0],
       blockName: `app-${app.id}`,
@@ -176,6 +179,7 @@ function activeVolumeOwners(): VolumeOwner[] {
     owners.push({
       key: `server:${panel.server_id}`,
       volumeId: panel.volume_id,
+      driverId: panel.volume_driver,
       serverId: panel.server_id,
       hostMountPath: panel.volume_mount.split(":")[0],
       blockName: "panel",
@@ -189,16 +193,20 @@ function activeVolumeOwners(): VolumeOwner[] {
  * reattached to its recorded host; a volume attached elsewhere is never moved
  * automatically and is surfaced as degraded instead. */
 export async function reconcileActiveVolumes(): Promise<void> {
-  if (!await secretStore.get(hetzner.tokenKey).catch(() => null)) return;
   for (const owner of activeVolumeOwners()) {
     const keys = [owner.key, `server:${owner.serverId}`, `volume:${owner.volumeId}`];
     try {
       await withLock([...new Set(keys)], "reconcile:volume", async () => {
         const server = db.getServer(owner.serverId);
-        if (!server?.provider_id || server.status !== "ready" || !serverCapabilities(server).providerVolumes) return;
+        if (!server || server.status !== "ready") return;
+        const driver = requireStorageDriver(owner.driverId);
+        if (!driver.supports(server)) {
+          owner.markDegraded(`storage driver ${driver.id} does not support server ${server.name}`);
+          return;
+        }
         let volume;
         try {
-          volume = await hetzner.volumes.get(owner.volumeId);
+          volume = await driver.inspect(owner.volumeId, server);
         } catch (error) {
           owner.markDegraded(
             isNotFoundError(error)
@@ -207,31 +215,18 @@ export async function reconcileActiveVolumes(): Promise<void> {
           );
           return;
         }
-        if (volume.serverId && volume.serverId !== server.provider_id) {
-          owner.markDegraded(`volume ${owner.volumeId} is attached to unexpected server ${volume.serverId}`);
+        const expectedServerId = driver.portable ? server.provider_id : String(server.id);
+        if (volume.attachedServerId && volume.attachedServerId !== expectedServerId) {
+          owner.markDegraded(`volume ${owner.volumeId} is attached to unexpected server ${volume.attachedServerId}`);
           return;
         }
-        if (!volume.serverId) await hetzner.volumes.attach(owner.volumeId, server.provider_id);
-        const status = await bindMountStatus({
-          serverIp: server.ipv4,
-          hostKey: server.ssh_host_key || undefined,
-          hostMountPath: owner.hostMountPath,
-          expectedVolumeId: owner.volumeId,
+        if (!volume.attachedServerId) await driver.attach(owner.volumeId, server);
+        await driver.ensureMount({
+          server,
+          volumeId: owner.volumeId,
+          hostPath: owner.hostMountPath,
           blockName: owner.blockName,
         });
-        if (
-          !status.mounted || !status.fstabPresent ||
-          !status.matchesExpectedVolume
-        ) {
-          await ensureVolumeBindMount({
-            serverIp: server.ipv4,
-            hostKey: server.ssh_host_key || undefined,
-            hetznerVolumeId: owner.volumeId,
-            hostMountPath: owner.hostMountPath,
-            blockName: owner.blockName,
-            mountWaitMs: 15_000,
-          });
-        }
       });
     } catch (error) {
       owner.markDegraded(`volume reconciliation failed: ${error}`);

@@ -1,7 +1,5 @@
 import type { ServerRow } from "../shared/db/servers.ts";
-import { sshExec, sshExecStreaming, sshExecWithStdin } from "./hetzner/ssh.ts";
-import { dockerLoginRegistry } from "./hetzner/registry.ts";
-import { asUser } from "./hetzner/container-common.ts";
+import { sshExec, sshExecStreaming, sshExecWithStdin, dockerLoginRegistry, asUser } from "../shared/remote/index.ts";
 
 export const BUILD_WORKER_VERSION = "2";
 export const BUILD_PLATFORM = "linux/amd64";

@@ -6,7 +6,7 @@
 //
 // Two entry points:
 //   - bootstrapPanel(): run once from auto-deploy (headless bootstrap in a
-//     local Docker container). Provisions a Hetzner server and volume,
+//     local Docker container). Provisions a server and compatible volume,
 //     pulls the panel artifact, hands off a snapshot of the bootstrap DB to
 //     the server's volume, then starts the hosted container.
 //   - redeployPanel(): run from inside the hosted panel when the operator
@@ -16,7 +16,7 @@
 //     if the panel container is destroyed seconds later.
 import { resolve4 } from "node:dns/promises";
 import * as db from "../../shared/db.ts";
-import { hetzner } from "../../shared/providers/index.ts";
+import { requireInfrastructureProvider } from "../../shared/providers/index.ts";
 import {
   sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
   pullImmutableImageAndRun, healthCheck, getContainerLogs,
@@ -25,9 +25,10 @@ import { deployTraefikPanelSite, installTraefikOn } from "../scale/traefik-manag
 import { wakerPublishFlags } from "../scale/traefik-constants.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { handoffDbToVolume } from "./self-deploy.ts";
-import { dockerLoginRegistry } from "../hetzner/registry.ts";
+import { dockerLoginRegistry } from "../../shared/remote/index.ts";
 import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
-import { DEFAULT_LOG_MAX_FILES, DEFAULT_LOG_MAX_SIZE } from "../hetzner/container-common.ts";
+import { DEFAULT_LOG_MAX_FILES, DEFAULT_LOG_MAX_SIZE } from "../../shared/remote/index.ts";
+import { defaultStorageDriverForServer, requireStorageDriver } from "../storage/index.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
 
@@ -67,6 +68,7 @@ async function waitForHttps(domain: string, attempts: number): Promise<boolean> 
 }
 
 export type BootstrapPanelOpts = {
+  providerId: string;
   appName: string;
   /** Public domain. When omitted, a `<server-ip>.nip.io` domain is derived
    *  after the server is created and served with a self-signed cert. */
@@ -84,7 +86,7 @@ export type BootstrapPanelOpts = {
 /**
  * Provision infrastructure for the hosted panel and hand off the bootstrap
  * DB to it. Must be called from the local bootstrap panel (the Docker
- * container started by the one-liner install). On success, the Hetzner
+ * container started by the one-liner install). On success, the managed
  * server is running the panel image with the bootstrap DB loaded; the
  * bootstrap can exit.
  */
@@ -122,8 +124,9 @@ export async function bootstrapPanel(
   let providerServerId: string | undefined;
   let dbServerId: number | undefined;
   let volumeId: string | undefined;
+  let volumeDriverId: string | undefined;
 
-  const compute = hetzner;
+  const compute = requireInfrastructureProvider(opts.providerId);
 
   try {
     // 0. Guard against duplicate provisioning. The bootstrap DB is ephemeral
@@ -141,7 +144,7 @@ export async function bootstrapPanel(
         error:
           `A panel server already exists (${existing.name} @ ${existing.ipv4}). ` +
           (domain ? `The panel may already be live at https://${domain}. ` : "") +
-          `Destroy that server in the Hetzner console before re-running bootstrap.`,
+          `Destroy that server in the ${compute.name} console before re-running bootstrap.`,
       };
     }
 
@@ -151,7 +154,7 @@ export async function bootstrapPanel(
     const [sshKey, firewallId, networkId] = await Promise.all([
       compute.ensureSshKey("open-cli-deployment", publicKey),
       compute.ensureFirewall(),
-      ensureSharedNetwork(),
+      ensureSharedNetwork(compute),
     ]);
 
     // 2. Create server
@@ -165,7 +168,7 @@ export async function bootstrapPanel(
       type: opts.serverType,
       location: opts.serverLocation,
       status: "creating",
-      provider: "hetzner",
+      provider: compute.id,
       ownership: "managed",
     });
     dbServerId = dbServer.id;
@@ -185,7 +188,7 @@ export async function bootstrapPanel(
       provider_id: providerServerId,
       ipv4: serverIp,
       ipv6: providerServer.ipv6 || "",
-      private_ipv4: providerServer.privateIpv4 || "",
+      routing_address: providerServer.routingAddress || "",
       status: "provisioning",
       management_address: serverIp,
     });
@@ -223,27 +226,23 @@ export async function bootstrapPanel(
 
     // 6. Create + mount volume
     onProgress("artifact", `Creating ${opts.volumeSize}GB persistent volume...`);
-    if (!compute.volumes) throw new Error("Compute provider does not support volumes");
-    const vol = await compute.volumes.create({
+    const readyServer = db.getServer(dbServer.id);
+    if (!readyServer) throw new Error("Panel server disappeared during bootstrap");
+    const storage = defaultStorageDriverForServer(readyServer);
+    volumeDriverId = storage.id;
+    const vol = await storage.create({
+      server: readyServer,
       name: `ocd-${opts.appName}-data`,
       sizeGb: opts.volumeSize,
-      serverId: providerServerId,
-      location: opts.serverLocation,
     });
-    volumeId = vol.providerId;
-    const hostMountPath = `/mnt/ocd-${opts.appName}-data`;
-    {
-      const { ensureVolumeBindMount } = await import("../hetzner/host-mounts.ts");
-      // Wait briefly so automount settles before we bind on top.
-      await new Promise((r) => setTimeout(r, 3000));
-      await ensureVolumeBindMount({
-        serverIp,
-        hostKey: hostKey || undefined,
-        hetznerVolumeId: volumeId,
-        hostMountPath,
-        blockName: `panel`,
-      });
-    }
+    volumeId = vol.id;
+    const hostMountPath = vol.hostPath;
+    await storage.ensureMount({
+      server: readyServer,
+      volumeId,
+      hostPath: hostMountPath,
+      blockName: "panel",
+    });
     const volumeMount = `${hostMountPath}:${opts.volumePath}`;
     onProgress("artifact", `Volume ready (${volumeMount})`);
 
@@ -261,6 +260,7 @@ export async function bootstrapPanel(
       container_port: opts.containerPort,
       host_port: hostPort,
       volume_id: volumeId,
+      volume_driver: storage.id,
       volume_mount: volumeMount,
       env_vars: JSON.stringify(opts.envVars),
       status: "running",
@@ -297,7 +297,7 @@ export async function bootstrapPanel(
         // Publish the in-process waker's HTTP port so sleeping apps' Traefik
         // routers (which dial `<panel-private-ip>:8896`) can reach it. Empty
         // until the private network is attached; the first redeploy backfills.
-        extraPublish: wakerPublishFlags(providerServer.privateIpv4 || ""),
+        extraPublish: wakerPublishFlags(providerServer.routingAddress || ""),
       },
       (line) => onProgress("artifact", line),
     );
@@ -385,7 +385,8 @@ export async function bootstrapPanel(
     // Rollback
     if (volumeId) {
       try {
-        await compute.volumes?.delete(volumeId);
+        const server = dbServerId ? db.getServer(dbServerId) ?? undefined : undefined;
+        if (volumeDriverId) await requireStorageDriver(volumeDriverId).delete(volumeId, server);
       } catch (e) {
         log("error", `Rollback: failed to delete volume ${volumeId}: ${e}`);
       }
@@ -422,13 +423,13 @@ export function buildPanelReleaseScript(opts: {
   image: string;
   hostPort: number;
   containerPort: number;
-  /** Panel server's private IPv4 — where the waker HTTP port is published so
+  /** Panel server's routing IPv4 — where the waker HTTP port is published so
    *  Traefik can reach the in-process waker for sleeping apps. "" → skip. */
-  privateIpv4: string;
+  routingAddress: string;
   envFilePath: string;
   /** "-v src:dst" or "". */
   volumeFlag: string;
-  /** Friendly host bind path and attached Hetzner mount used to migrate
+  /** Friendly host bind path and attached storage mount used to migrate
    * historical root-disk panel data during the stopped swap. Both empty means
    * no persistent volume migration is needed. */
   volumeHostPath?: string;
@@ -444,14 +445,14 @@ export function buildPanelReleaseScript(opts: {
   healthRetries?: number;
 }): string {
   const {
-    containerName, image, hostPort, containerPort, privateIpv4, envFilePath,
+    containerName, image, hostPort, containerPort, routingAddress, envFilePath,
     volumeFlag, registryEnvPrefix, registryConfigDir, pullRetries, pullSleepSeconds,
   } = opts;
   const healthRetries = opts.healthRetries ?? 30;
   // Publish the waker HTTP port (bound to the private IP) alongside the panel's
   // own loopback port, so sleeping apps' Traefik routers can reach the in-process
   // waker. Without this every sleeping-app hit 502s and nothing wakes.
-  const wakerFlags = wakerPublishFlags(privateIpv4)
+  const wakerFlags = wakerPublishFlags(routingAddress)
     .map((f) => ` ${f}`)
     .join("");
   const cleanup = registryConfigDir
@@ -699,7 +700,7 @@ export async function redeployPanel(
       image,
       hostPort: panel.host_port,
       containerPort: panel.container_port,
-      privateIpv4: server.private_ipv4 || "",
+      routingAddress: server.routing_address || "",
       envFilePath,
       volumeFlag,
       volumeHostPath,

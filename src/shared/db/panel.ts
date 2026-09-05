@@ -18,6 +18,7 @@ export type PanelRow = {
   host_port: number;
   volume_id: string;
   volume_mount: string;
+  volume_driver: string;
   env_vars: string;
   status: string;
   deploy_log: string;
@@ -47,14 +48,15 @@ export function insertPanel(panel: {
   host_port: number;
   volume_id?: string;
   volume_mount?: string;
+  volume_driver?: string;
   env_vars?: string;
   status?: string;
 }): PanelRow {
   assertImmutableImageRef(panel.image_ref);
   return db
     .query(
-      "INSERT INTO panel (id, server_id, name, domain, image_ref, container_port, host_port, volume_id, volume_mount, env_vars, status) " +
-        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO panel (id, server_id, name, domain, image_ref, container_port, host_port, volume_id, volume_mount, volume_driver, env_vars, status) " +
+        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       panel.server_id,
@@ -65,6 +67,7 @@ export function insertPanel(panel: {
       panel.host_port,
       panel.volume_id ?? "",
       panel.volume_mount ?? "",
+      panel.volume_driver ?? "",
       panel.env_vars ?? "{}",
       panel.status ?? "running",
     ) as PanelRow;

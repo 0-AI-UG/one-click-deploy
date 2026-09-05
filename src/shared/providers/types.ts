@@ -7,7 +7,7 @@ export type ProviderServer = {
   /** Private network IPv4 assigned by the provider at create time. Empty
    *  string when the provider doesn't implement private networking or the
    *  server isn't attached. */
-  privateIpv4?: string;
+  routingAddress?: string;
   status: string;
 };
 

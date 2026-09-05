@@ -209,7 +209,7 @@ describe("reconciler: health checks respect paused state", () => {
   function makeHealthFixture(appStatus = "running") {
     const server = makeServer();
     const { default: conn } = require("../shared/db/connection.ts");
-    conn.run("UPDATE servers SET private_ipv4 = '10.0.0.9' WHERE id = ?", [server.id]);
+    conn.run("UPDATE servers SET routing_address = '10.0.0.9' WHERE id = ?", [server.id]);
     const app = makeApp();
     conn.run("UPDATE apps SET status = ? WHERE id = ?", [appStatus, app.id]);
     const replica = insertReplica({

@@ -1,24 +1,18 @@
 import { createHash, createHmac } from "node:crypto";
-import { getSettings } from "../../shared/db.ts";
 import { secretStore } from "../../shared/secret-store.ts";
+import { assignedProvider, providerSecretKey } from "../../shared/provider-connections.ts";
 
-export const HETZNER_S3_REGIONS = ["fsn1", "nbg1", "hel1"] as const;
-export type HetznerS3Region = (typeof HETZNER_S3_REGIONS)[number];
-
-export const HETZNER_S3_ACCESS_KEY = "hetzner_s3_access_key";
-export const HETZNER_S3_SECRET_KEY = "hetzner_s3_secret_key";
-export const HETZNER_S3_REGION_SETTING = "hetzner_s3_region";
-
-export type HetznerS3Credentials = {
+export type S3Credentials = {
   accessKey: string;
   secretKey: string;
-  region: HetznerS3Region;
+  region: string;
+  endpoint: string;
 };
 
-export type HetznerS3Bucket = {
+export type S3Bucket = {
   name: string;
   createdAt: string;
-  region: HetznerS3Region;
+  region: string;
   endpoint: string;
 };
 
@@ -35,8 +29,17 @@ function amzDate(now: Date): { timestamp: string; date: string } {
   return { timestamp, date: timestamp.slice(0, 8) };
 }
 
-export function isHetznerS3Region(value: string): value is HetznerS3Region {
-  return HETZNER_S3_REGIONS.includes(value as HetznerS3Region);
+export function isS3Region(value: string): boolean {
+  return /^[a-z0-9][a-z0-9-]{0,62}$/.test(value);
+}
+
+export function isS3Endpoint(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.pathname === "/" && !url.username && !url.password;
+  } catch {
+    return false;
+  }
 }
 
 export function validateBucketName(raw: string): { valid: true; value: string } | { valid: false; error: string } {
@@ -56,14 +59,10 @@ export function validateBucketName(raw: string): { valid: true; value: string } 
   return { valid: true, value };
 }
 
-export function endpointForRegion(region: HetznerS3Region): string {
-  return `https://${region}.your-objectstorage.com`;
-}
-
 export function signS3Request(opts: {
   method: "GET" | "PUT" | "DELETE" | "HEAD";
   path: string;
-  credentials: HetznerS3Credentials;
+  credentials: S3Credentials;
   body?: string;
   now?: Date;
   headers?: Record<string, string>;
@@ -72,7 +71,7 @@ export function signS3Request(opts: {
   const { timestamp, date } = amzDate(now);
   const body = opts.body ?? "";
   const payloadHash = sha256(body);
-  const endpoint = new URL(endpointForRegion(opts.credentials.region));
+  const endpoint = new URL(opts.credentials.endpoint);
   const canonicalUri = opts.path.startsWith("/") ? opts.path : `/${opts.path}`;
   const normalizedExtraHeaders = Object.fromEntries(
     Object.entries(opts.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value.trim()]),
@@ -122,36 +121,36 @@ function xmlTag(xml: string, tag: string): string {
   return match ? decodeXml(match[1].trim()) : "";
 }
 
-export function parseListBuckets(xml: string, region: HetznerS3Region): HetznerS3Bucket[] {
-  const buckets: HetznerS3Bucket[] = [];
+export function parseListBuckets(xml: string, credentials: Pick<S3Credentials, "region" | "endpoint">): S3Bucket[] {
+  const buckets: S3Bucket[] = [];
   for (const match of xml.matchAll(/<Bucket(?:\s[^>]*)?>([\s\S]*?)<\/Bucket>/gi)) {
     const name = xmlTag(match[1], "Name");
     if (!name) continue;
     buckets.push({
       name,
       createdAt: xmlTag(match[1], "CreationDate"),
-      region,
-      endpoint: endpointForRegion(region),
+      region: credentials.region,
+      endpoint: credentials.endpoint,
     });
   }
   return buckets.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export class HetznerS3Error extends Error {
+export class S3Error extends Error {
   constructor(
     message: string,
     public readonly status: number,
     public readonly code: string,
   ) {
     super(message);
-    this.name = "HetznerS3Error";
+    this.name = "S3Error";
   }
 }
 
 async function s3Request(
   method: "GET" | "PUT" | "DELETE" | "HEAD",
   path: string,
-  credentials: HetznerS3Credentials,
+  credentials: S3Credentials,
   opts: { body?: string; headers?: Record<string, string>; fetcher?: typeof fetch } = {},
 ): Promise<Response> {
   const signed = signS3Request({ method, path, credentials, body: opts.body, headers: opts.headers });
@@ -171,37 +170,40 @@ async function s3Request(
     const message = code === "BucketNotEmpty"
       ? "Bucket is not empty. OCD never recursively deletes objects; remove every object and version first."
       : code === "AccessDenied"
-        ? "Access denied. Check the Hetzner S3 credentials and bucket policy."
+        ? "Access denied. Check the S3 credentials and bucket policy."
         : code === "InvalidAccessKeyId" || code === "SignatureDoesNotMatch"
-          ? "Invalid Hetzner S3 credentials."
-          : providerMessage || `Hetzner S3 request failed (${response.status})`;
-    throw new HetznerS3Error(message, response.status, code);
+          ? "Invalid S3 credentials."
+          : providerMessage || `S3 request failed (${response.status})`;
+    throw new S3Error(message, response.status, code);
   } finally {
     clearTimeout(timeout);
   }
 }
 
-export async function getHetznerS3Credentials(): Promise<HetznerS3Credentials | null> {
+export async function getS3Credentials(): Promise<S3Credentials | null> {
+  const provider = assignedProvider("object_storage");
+  if (!provider || provider.kind !== "s3-compatible") return null;
   const [accessKey, secretKey] = await Promise.all([
-    secretStore.get(HETZNER_S3_ACCESS_KEY),
-    secretStore.get(HETZNER_S3_SECRET_KEY),
+    secretStore.get(providerSecretKey(provider.id, "access_key")),
+    secretStore.get(providerSecretKey(provider.id, "secret_key")),
   ]);
-  const rawRegion = getSettings()[HETZNER_S3_REGION_SETTING] ?? "fsn1";
-  if (!accessKey || !secretKey || !isHetznerS3Region(rawRegion)) return null;
-  return { accessKey, secretKey, region: rawRegion };
+  const region = provider.config.region ?? "";
+  const endpoint = provider.config.endpoint ?? "";
+  if (!accessKey || !secretKey || !isS3Region(region) || !isS3Endpoint(endpoint)) return null;
+  return { accessKey, secretKey, region, endpoint };
 }
 
 export async function listBuckets(
-  credentials: HetznerS3Credentials,
+  credentials: S3Credentials,
   fetcher?: typeof fetch,
-): Promise<HetznerS3Bucket[]> {
+): Promise<S3Bucket[]> {
   const response = await s3Request("GET", "/", credentials, { fetcher });
-  return parseListBuckets(await response.text(), credentials.region);
+  return parseListBuckets(await response.text(), credentials);
 }
 
 export async function createBucket(
   name: string,
-  credentials: HetznerS3Credentials,
+  credentials: S3Credentials,
   fetcher?: typeof fetch,
 ): Promise<void> {
   const checked = validateBucketName(name);
@@ -214,7 +216,7 @@ export async function createBucket(
 
 export async function deleteBucket(
   name: string,
-  credentials: HetznerS3Credentials,
+  credentials: S3Credentials,
   fetcher?: typeof fetch,
 ): Promise<void> {
   const checked = validateBucketName(name);

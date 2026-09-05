@@ -1,6 +1,6 @@
 import { unlinkSync } from "node:fs";
 import * as db from "../../shared/db.ts";
-import { buildSshArgs, sshExec } from "../../engine/hetzner/ssh.ts";
+import { buildSshArgs, sshExec } from "../../shared/remote/index.ts";
 import { authenticateRequest } from "../lib/auth.ts";
 import { AuthError } from "../lib/errors.ts";
 import { appScope } from "../lib/permissions.ts";

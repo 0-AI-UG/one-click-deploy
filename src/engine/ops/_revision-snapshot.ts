@@ -1,5 +1,5 @@
 import { sshExec } from "../../shared/remote/index.ts";
-import { asUser } from "../hetzner/container-common.ts";
+import { asUser } from "../../shared/remote/index.ts";
 
 export type RemoteRevisionSnapshot = {
   image: string;

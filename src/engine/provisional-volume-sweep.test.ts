@@ -4,15 +4,16 @@ useTempDataDir();
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 const compute = makeFakeComputeProvider();
-mock.module("../shared/providers/index.ts", () => ({ hetzner: compute }));
 
 import sql, * as db from "../shared/db.ts";
+import { __replaceInfrastructureProvidersForTest } from "../shared/providers/registry.ts";
 import { sweepExpiredProvisionalVolumes } from "./provisional-volume-sweep.ts";
 
 function retire(retentionClass: "user" | "provisional") {
   const providerVolumeId = `vol-${retentionClass}-${randomSuffix()}`;
   db.retireVolume({
     providerVolumeId,
+    driverId: "hetzner-block",
     formerResourceType: "app",
     formerResourceId: 0,
     formerResourceName: `resource-${randomSuffix()}`,
@@ -25,6 +26,7 @@ function retire(retentionClass: "user" | "provisional") {
 }
 
 beforeEach(() => {
+  __replaceInfrastructureProvidersForTest([compute]);
   compute._mocks.volumeDelete.mockClear();
   compute.volumes!.get = async (id) => ({
     providerId: id,

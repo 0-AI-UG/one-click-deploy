@@ -52,7 +52,7 @@ describe("infrastructure reconciliation", () => {
       ownership: "connected",
       ipv4: "203.0.113.2",
       ipv6: "",
-      private_ipv4: "10.0.0.2",
+      routing_address: "10.0.0.2",
       type: "external",
       location: "external",
       status: "ready",

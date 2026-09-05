@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertConnectedStatelessWorkload, assertProviderVolumesSupported, serverCapabilities } from "./infrastructure.ts";
+import { serverCapabilities } from "./infrastructure.ts";
 
 describe("server infrastructure capabilities", () => {
   test("managed Hetzner servers expose the narrow provider lifecycle capabilities", () => {
@@ -11,21 +11,12 @@ describe("server infrastructure capabilities", () => {
     });
   });
 
-  test("connected servers are stateless and never provider-owned", () => {
+  test("connected servers have no provider-owned infrastructure capabilities", () => {
     expect(serverCapabilities({ provider: "external", ownership: "connected" })).toEqual({
       providerLifecycle: false,
       providerVolumes: false,
       providerNetwork: false,
       providerFirewall: false,
     });
-    expect(() => assertProviderVolumesSupported({
-      name: "external-1",
-      provider: "external",
-      ownership: "connected",
-    })).toThrow(/does not support OCD-managed volumes/);
-    expect(() => assertConnectedStatelessWorkload(
-      { name: "external-1", provider: "external", ownership: "connected" },
-      { managedVolume: false, hostMounts: true },
-    )).toThrow(/only stateless app containers/);
   });
 });

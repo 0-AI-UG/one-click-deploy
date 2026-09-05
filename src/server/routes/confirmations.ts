@@ -3,8 +3,9 @@ import { requireAuthenticated } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { getOperation } from "../../shared/db/operations.ts";
-import { hetzner } from "../../shared/providers/index.ts";
+import { requireStorageDriver } from "../../engine/storage/index.ts";
 import { parseServerProvisioningResourceId } from "../../shared/server-provisioning.ts";
+import { getS3Credentials } from "../../engine/object-storage/s3.ts";
 import {
   createConfirmation,
   pollConfirmation,
@@ -101,12 +102,16 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
     } else if (action === "delete_volume") {
       let volume;
       try {
-        volume = await hetzner.volumes.get(resourceId);
+        const app = db.getApps().find((candidate) => candidate.volume_id === resourceId);
+        const retired = db.getRetiredVolumes().find((candidate) => candidate.provider_volume_id === resourceId);
+        const driverId = app?.volume_driver || retired?.driver_id;
+        if (!driverId) throw new Error("untracked volume");
+        volume = await requireStorageDriver(driverId).inspect(resourceId);
       } catch {
         return Response.json({ error: "Volume not found" }, { status: 404, headers: corsHeaders });
       }
       summary =
-        `Permanently delete provider volume "${volume.name}" (id ${volume.providerId}, ` +
+        `Permanently delete storage volume "${volume.name}" (id ${volume.id}, ` +
         `${volume.sizeGb} GB, ${volume.location}) and all data on it. This cannot be undone.`;
     } else if (action === "create_server") {
       if (resourceType !== "server_plan") {
@@ -118,10 +123,10 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
         `Allow creation of one or more billable provider servers as required for ${plan.reason}: ` +
         `${plan.serverType} in ${plan.location}, pool${plan.pools.length === 1 ? "" : "s"} ${plan.pools.join(", ")}.`;
     } else if (action === "create_bucket") {
-      const region = db.getSettings().hetzner_s3_region || "fsn1";
-      summary = `Create private Hetzner S3 bucket "${resourceId}" in ${region}. Creating the first active bucket starts Hetzner Object Storage billing.`;
+      const region = (await getS3Credentials())?.region || "the selected provider";
+      summary = `Create private S3-compatible bucket "${resourceId}" in ${region}. Provider billing may apply.`;
     } else if (action === "delete_bucket") {
-      summary = `Delete empty Hetzner S3 bucket "${resourceId}". OCD will refuse to recursively delete objects or versions.`;
+      summary = `Delete empty S3-compatible bucket "${resourceId}". OCD will refuse to recursively delete objects or versions.`;
     } else if (action === "promote_app") {
       const match = /^(\d+):(\d+)$/.exec(resourceId);
       const source = match ? db.getApp(Number(match[1])) : null;

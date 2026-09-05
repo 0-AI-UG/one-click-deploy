@@ -2,30 +2,30 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
-import { hetzner } from "../../shared/providers/index.ts";
+import { defaultInfrastructureProvider, infrastructureProviderForServer, isManagedServer } from "../../shared/infrastructure.ts";
+import { requireStorageDriver, type StorageVolume } from "../../engine/storage/index.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { serverProvisioningResourceId } from "../../shared/server-provisioning.ts";
-import { isManagedHetznerServer } from "../../shared/infrastructure.ts";
-import { secretStore } from "../../shared/secret-store.ts";
-import { getHetznerS3Credentials, listBuckets, type HetznerS3Bucket } from "../../engine/hetzner/s3.ts";
+import { getInfrastructureToken } from "../../shared/secret-store.ts";
+import { getS3Credentials, listBuckets, type S3Bucket } from "../../engine/object-storage/s3.ts";
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
 
-    const compute = hetzner;
-    const providerConfigured = !!await secretStore.get(compute.tokenKey).catch(() => null);
+    const compute = defaultInfrastructureProvider(db.getSettings());
+    const providerConfigured = !!compute && !!await getInfrastructureToken(compute.id).catch(() => "");
     const dbServers = db.getServers();
-    const hasManagedHetzner = providerConfigured && dbServers.some(isManagedHetznerServer);
+    const hasManagedProvider = providerConfigured && dbServers.some(isManagedServer);
 
     // Fetch pricing once and build lookup maps.
     // If pricing fetch fails (no token, network), monthly_eur falls back to null.
     let serverPriceMap = new Map<string, number>();
     let volumePerGbMonth: number | null = null;
     let currency = "EUR";
-    if (hasManagedHetzner) try {
-      const pricing = await compute.getPricing?.();
+    if (hasManagedProvider) try {
+      const pricing = await compute?.getPricing?.();
       if (pricing) {
         currency = pricing.currency;
         for (const [key, value] of Object.entries(pricing.servers)) {
@@ -43,8 +43,8 @@ export async function handleGetResources(request: Request): Promise<Response> {
     // vCPU count per server type, so the UI can render server load as
     // "cores used / total" instead of a bare percentage.
     const coresByType = new Map<string, number>();
-    if (hasManagedHetzner) try {
-      const types = await compute.listServerTypes?.();
+    if (hasManagedProvider) try {
+      const types = await compute?.listServerTypes?.();
       for (const t of types ?? []) coresByType.set(t.name, t.cores);
     } catch (e) {
       console.error("resources: failed to fetch server types:", e);
@@ -71,7 +71,7 @@ export async function handleGetResources(request: Request): Promise<Response> {
         provider: s.provider,
         ownership: s.ownership,
         management_address: s.management_address,
-        private_ipv4: s.private_ipv4,
+        routing_address: s.routing_address,
         ssh_user: s.ssh_user,
         ssh_port: s.ssh_port,
         ipv4: s.ipv4,
@@ -87,7 +87,7 @@ export async function handleGetResources(request: Request): Promise<Response> {
           ? Math.round((usage.disk_total_gb - usage.disk_used_gb) * 10) / 10
           : null,
         replica_count: db.getReplicasByServer(s.id).length,
-        monthly_eur: isManagedHetznerServer(s) ? priceForServer(s.type, s.location) : null,
+        monthly_eur: isManagedServer(s) ? priceForServer(s.type, s.location) : null,
       };
     });
 
@@ -144,7 +144,7 @@ export async function handleGetResources(request: Request): Promise<Response> {
     }
     let volumes: VolumeResource[] = [...trackedVolumes.values()];
     if (providerConfigured) try {
-      const vols = await compute.volumes?.list() ?? [];
+      const vols = await compute?.volumes?.list() ?? [];
       const allApps = db.getApps();
       const retiredById = new Map(
         db.getRetiredVolumes().map((row) => [row.provider_volume_id, row]),
@@ -179,14 +179,14 @@ export async function handleGetResources(request: Request): Promise<Response> {
     interface ResourceWithCost { monthly_eur: number | null }
     const sum = (arr: ResourceWithCost[]) =>
       arr.reduce((acc, x) => acc + (typeof x.monthly_eur === "number" ? x.monthly_eur : 0), 0);
-    const s3Credentials = await getHetznerS3Credentials();
-    let buckets: HetznerS3Bucket[] = [];
+    const s3Credentials = await getS3Credentials();
+    let buckets: S3Bucket[] = [];
     let s3Error = "";
     if (s3Credentials) {
       try {
         buckets = await listBuckets(s3Credentials);
       } catch (error) {
-        s3Error = error instanceof Error ? error.message : "Could not load Hetzner S3 buckets";
+        s3Error = error instanceof Error ? error.message : "Could not load S3 buckets";
         console.error("resources: failed to fetch S3 buckets:", error);
       }
     }
@@ -234,7 +234,6 @@ export async function handleDeleteResource(request: Request, type: string, id: s
         ? "volumes.delete"
         : "resources.delete";
     const payload = await requirePermission(request, permission);
-    const compute = hetzner;
 
     if (type === "server") {
       const server = db.getServers().find((s) => s.provider_id === id || String(s.id) === id);
@@ -278,21 +277,25 @@ export async function handleDeleteResource(request: Request, type: string, id: s
         );
       }
       await enforceConfirmation(request, payload, "delete_volume", "volume", id);
-      const volume = await compute.volumes.get(id);
       const retired = db.getRetiredVolumes().find((row) => row.provider_volume_id === id);
+      const driverId = retired?.driver_id || db.getApps().find((app) => app.volume_id === id)?.volume_driver;
+      if (!driverId) throw new Error(`Cannot determine storage driver for volume ${id}`);
+      const driver = requireStorageDriver(driverId);
+      const volume = await driver.inspect(id);
       const audit = db.beginVolumeDeletionAudit({
         actorUserId: payload.userId,
         providerVolumeId: id,
         providerVolumeName: volume.name,
+        driverId,
         formerResourceType: retired?.former_resource_type,
         formerResourceId: retired?.former_resource_id,
         formerResourceName: retired?.former_resource_name,
-        retentionState: retired?.state ?? (volume.serverId ? "attached" : "detached"),
+        retentionState: retired?.state ?? (volume.attachedServerId ? "attached" : "detached"),
         retiredAt: retired?.retired_at,
         purgeAfter: retired?.purge_after,
       });
       try {
-        await compute.volumes.delete(id);
+        await driver.delete(id);
         db.finishVolumeDeletionAudit(audit.id);
         db.deleteRetiredVolume(id);
       } catch (error) {
@@ -318,31 +321,36 @@ export async function handleGetVolumeDeletionAudit(request: Request): Promise<Re
 }
 
 /**
- * Resolve the host mount path for a Hetzner-style volume given its provider id.
+ * Resolve the host mount path for a tracked storage volume given its driver id.
  * Returns null when the volume is unattached or we can't find any app using it
  * (i.e. no record of where it was mounted).
  */
 async function resolveVolumeMount(volumeId: string): Promise<
-  | { ok: true; server: ReturnType<typeof db.getServer> & {}; hostPath: string; volume: { providerId: string; name: string; sizeGb: number; location: string; serverId: string | null } }
-  | { ok: false; error: string; status?: number; volume?: { providerId: string; name: string; sizeGb: number; location: string; serverId: string | null } }
+  | { ok: true; server: ReturnType<typeof db.getServer> & {}; hostPath: string; volume: StorageVolume }
+  | { ok: false; error: string; status?: number; volume?: StorageVolume }
 > {
-  const compute = hetzner;
+  const app = db.getApps().find((candidate) => candidate.volume_id === volumeId);
+  const retired = db.getRetiredVolumes().find((candidate) => candidate.provider_volume_id === volumeId);
+  const driverId = app?.volume_driver || retired?.driver_id;
+  if (!driverId) return { ok: false, error: "Volume is not tracked by OCD", status: 404 };
+  const driver = requireStorageDriver(driverId);
   let volume;
   try {
-    volume = await compute.volumes.get(volumeId);
+    volume = await driver.inspect(volumeId);
   } catch {
     return { ok: false, error: "Volume not found", status: 404 };
   }
-  if (!volume.serverId) {
+  if (!volume.attachedServerId) {
     return { ok: false, error: "Volume is not attached to a server", status: 409, volume };
   }
-  const server = db.getServers().find((s) => s.provider_id === volume.serverId);
+  const server = db.getServers().find((s) =>
+    s.provider_id === volume.attachedServerId || String(s.id) === volume.attachedServerId
+  );
   if (!server) {
     return { ok: false, error: "Volume's server is not tracked locally", status: 404, volume };
   }
   // Prefer the host-path recorded on the consuming app's volume_mount.
-  const app = db.getApps().find((a) => a.volume_id === volumeId);
-  const hostPath = app?.volume_mount?.split(":")[0] || `/mnt/ocd-${volume.name}-data`;
+  const hostPath = app?.volume_mount?.split(":")[0] || volume.hostPath;
   return { ok: true, server, hostPath, volume };
 }
 
@@ -362,22 +370,28 @@ function shellQuote(s: string): string {
 export async function handleGetVolumeDetail(request: Request, volumeId: string): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
-    const compute = hetzner;
+    const app = db.getApps().find((candidate) => candidate.volume_id === volumeId);
+    const retired = db.getRetiredVolumes().find((candidate) => candidate.provider_volume_id === volumeId);
+    const driverId = app?.volume_driver || retired?.driver_id;
+    if (!driverId) return Response.json({ error: "Volume is not tracked by OCD" }, { status: 404, headers: corsHeaders });
+    const driver = requireStorageDriver(driverId);
     let volume;
     try {
-      volume = await compute.volumes.get(volumeId);
+      volume = await driver.inspect(volumeId);
     } catch {
       return Response.json({ error: "Volume not found" }, { status: 404, headers: corsHeaders });
     }
     const dbServers = db.getServers();
-    const server = volume.serverId ? dbServers.find((s) => s.provider_id === volume.serverId) || null : null;
-    const app = db.getApps().find((a) => a.volume_id === volumeId) || null;
-    const hostPath = app?.volume_mount?.split(":")[0] || (volume.serverId ? `/mnt/ocd-${volume.name}-data` : null);
+    const server = volume.attachedServerId ? dbServers.find((s) =>
+      s.provider_id === volume.attachedServerId || String(s.id) === volume.attachedServerId
+    ) || null : null;
+    const hostPath = app?.volume_mount?.split(":")[0] || (volume.attachedServerId ? volume.hostPath : null);
     let pricing;
-    try { pricing = await compute.getPricing?.(); } catch { /* ignore */ }
+    const compute = defaultInfrastructureProvider(db.getSettings());
+    try { pricing = await compute?.getPricing?.(); } catch { /* ignore */ }
     const monthly_eur = pricing?.volumePerGbMonth != null ? pricing.volumePerGbMonth * volume.sizeGb : null;
     return Response.json({
-      id: volume.providerId,
+      id: volume.id,
       name: volume.name,
       size: volume.sizeGb,
       location: volume.location,
@@ -387,7 +401,7 @@ export async function handleGetVolumeDetail(request: Request, volumeId: string):
       app_id: app?.id || null,
       host_path: hostPath,
       monthly_eur,
-      attached: !!volume.serverId,
+      attached: !!volume.attachedServerId,
     }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -634,12 +648,12 @@ export async function handleGetServerDetail(request: Request, serverId: number):
       return Response.json({ error: "Server not found" }, { status: 404, headers: corsHeaders });
     }
 
-    const compute = hetzner;
+    const compute = isManagedServer(server) ? infrastructureProviderForServer(server) : null;
     let monthly_eur: number | null = null;
     let currency = "EUR";
-    const providerConfigured = !!await secretStore.get(compute.tokenKey).catch(() => null);
-    if (providerConfigured && isManagedHetznerServer(server)) try {
-      const pricing = await compute.getPricing?.();
+    const providerConfigured = !!compute && !!await getInfrastructureToken(compute.id).catch(() => "");
+    if (providerConfigured && isManagedServer(server)) try {
+      const pricing = await compute?.getPricing?.();
       if (pricing) {
         currency = pricing.currency;
         monthly_eur = pricing.servers[`${server.type}|${server.location}`] ?? null;
@@ -685,7 +699,7 @@ export async function handleGetServerDetail(request: Request, serverId: number):
       ssh_port: server.ssh_port,
       ipv4: server.ipv4,
       ipv6: server.ipv6,
-      private_ipv4: server.private_ipv4,
+      routing_address: server.routing_address,
       type: server.type,
       location: server.location,
       status: server.status,
@@ -712,10 +726,11 @@ export async function handleGetServerDetail(request: Request, serverId: number):
 export async function handleCreateServer(request: Request): Promise<Response> {
   try {
     const payload = await requirePermission(request, "servers.create");
-    const providerToken = await secretStore.get(hetzner.tokenKey).catch(() => null);
+    const compute = defaultInfrastructureProvider(db.getSettings());
+    const providerToken = compute ? await getInfrastructureToken(compute.id).catch(() => "") : "";
     if (!providerToken) {
       return Response.json(
-        { error: "Hetzner infrastructure is not configured. Add a token in Settings or connect an existing server." },
+        { error: "Infrastructure provisioning is not configured. Add and assign a provider in Admin → Providers, or connect an existing server." },
         { status: 409, headers: corsHeaders },
       );
     }

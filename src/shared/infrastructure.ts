@@ -1,6 +1,13 @@
 import type { ServerRow } from "./db/servers.ts";
+import {
+  getInfrastructureProvider,
+  requireInfrastructureProvider,
+  type InfrastructureProvider,
+  type VolumeProvider,
+} from "./providers/index.ts";
+import { assignedProvider } from "./provider-connections.ts";
 
-export type ServerProvider = "hetzner" | "external";
+export type ServerProvider = string;
 export type ServerOwnership = "managed" | "connected";
 
 export type ServerCapabilities = {
@@ -15,39 +22,52 @@ export type ServerCapabilities = {
 export function serverCapabilities(
   server: Pick<ServerRow, "provider" | "ownership">,
 ): ServerCapabilities {
-  const managedHetzner = server.provider === "hetzner" && server.ownership === "managed";
+  const provider = server.ownership === "managed"
+    ? getInfrastructureProvider(server.provider)
+    : null;
   return {
-    providerLifecycle: managedHetzner,
-    providerVolumes: managedHetzner,
-    providerNetwork: managedHetzner,
-    providerFirewall: managedHetzner,
+    providerLifecycle: !!provider?.capabilities.compute,
+    providerVolumes: !!provider?.capabilities.volumes,
+    providerNetwork: !!provider?.capabilities.privateNetwork,
+    providerFirewall: !!provider?.capabilities.firewall,
   };
 }
 
-export function isManagedHetznerServer(
+export function isManagedServer(
   server: Pick<ServerRow, "provider" | "ownership">,
 ): boolean {
   return serverCapabilities(server).providerLifecycle;
 }
 
-export function assertProviderVolumesSupported(
+export function infrastructureProviderForServer(
   server: Pick<ServerRow, "name" | "provider" | "ownership">,
-): void {
-  if (!serverCapabilities(server).providerVolumes) {
-    throw new Error(
-      `Server ${server.name} is externally connected and does not support OCD-managed volumes`,
-    );
+): InfrastructureProvider {
+  if (server.ownership !== "managed") {
+    throw new Error(`Server ${server.name} is operator-owned and has no infrastructure provider`);
   }
+  return requireInfrastructureProvider(server.provider);
 }
 
-export function assertConnectedStatelessWorkload(
-  server: Pick<ServerRow, "name" | "provider" | "ownership">,
-  requested: { managedVolume: boolean; hostMounts: boolean },
-): void {
-  if (server.ownership !== "connected") return;
-  if (requested.managedVolume || requested.hostMounts) {
-    throw new Error(
-      `Server ${server.name} is externally connected; only stateless app containers are supported`,
-    );
+export function defaultInfrastructureProvider(
+  settings: Record<string, string>,
+): InfrastructureProvider | null {
+  const connection = assignedProvider("infrastructure", settings);
+  return connection ? getInfrastructureProvider(connection.kind) : null;
+}
+
+export function requireDefaultInfrastructureProvider(
+  settings: Record<string, string>,
+): InfrastructureProvider {
+  const connection = assignedProvider("infrastructure", settings);
+  if (!connection) {
+    throw new Error("No infrastructure provisioner selected; connect a host or configure an optional provider");
   }
+  return requireInfrastructureProvider(connection.kind);
+}
+
+export function requireProviderVolumes(provider: InfrastructureProvider): VolumeProvider {
+  if (!provider.volumes) {
+    throw new Error(`Infrastructure provider "${provider.name}" does not support block volumes`);
+  }
+  return provider.volumes;
 }

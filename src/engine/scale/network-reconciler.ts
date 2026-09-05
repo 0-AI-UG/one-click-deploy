@@ -54,10 +54,10 @@ export async function syncInternalHosts(): Promise<void> {
       const server = db.getServer(snapshot.id);
       if (!server?.ipv4 || server.status !== "ready") continue;
       const lines: string[] = [];
-      if (server.private_ipv4) {
+      if (server.routing_address) {
         const everReady = wasProxyEverReady(server.ipv4);
         for (const app of apps) {
-          const line = appHostsLine(app, server.private_ipv4, everReady);
+          const line = appHostsLine(app, server.routing_address, everReady);
           if (line) lines.push(line);
         }
       }

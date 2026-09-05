@@ -26,7 +26,7 @@ import {
 // the bun test process, so every fixture uses unique names and assertions
 // select their own slice of the rendered config.
 
-function makeServer(privateIpv4 = `10.0.0.${Math.floor(Math.random() * 200) + 2}`) {
+function makeServer(routingAddress = `10.0.0.${Math.floor(Math.random() * 200) + 2}`) {
   return db.insertServer({
     name: `srv-${randomSuffix()}`,
     provider_id: `h-${randomSuffix()}`,
@@ -35,7 +35,7 @@ function makeServer(privateIpv4 = `10.0.0.${Math.floor(Math.random() * 200) + 2}
     type: "cx22",
     location: "fsn1",
     status: "ready",
-    private_ipv4: privateIpv4,
+    routing_address: routingAddress,
   });
 }
 
@@ -313,7 +313,7 @@ describe("renderDynamicConfig", () => {
   });
 
   test("sleeping app renders nothing when the panel has no private IP (no waker to reach)", () => {
-    // Panel server without a private_ipv4 — nowhere to route the waker.
+    // Panel server without a routing_address — nowhere to route the waker.
     const panelServer = db.insertServer({
       name: `srv-${randomSuffix()}`, provider_id: `h-${randomSuffix()}`,
       ipv4: "203.0.113.10", ipv6: "", type: "cx22", location: "fsn1", status: "ready",

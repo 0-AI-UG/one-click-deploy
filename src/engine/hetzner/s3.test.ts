@@ -1,24 +1,33 @@
 import { useTempDataDir } from "../../shared/test-helpers.ts";
 useTempDataDir();
 
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { saveProviderAssignments, saveProviderConnections, providerSecretKey } from "../../shared/provider-connections.ts";
+import { secretStore } from "../../shared/secret-store.ts";
 import {
   createBucket,
   deleteBucket,
-  HetznerS3Error,
+  S3Error,
   parseListBuckets,
   signS3Request,
   validateBucketName,
-  type HetznerS3Credentials,
-} from "./s3.ts";
+  getS3Credentials,
+  type S3Credentials,
+} from "../object-storage/s3.ts";
 
-const credentials: HetznerS3Credentials = {
+beforeEach(() => {
+  saveProviderConnections([]);
+  saveProviderAssignments({ infrastructure: "", object_storage: "" });
+});
+
+const credentials: S3Credentials = {
   accessKey: "AKIDEXAMPLE",
   secretKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
   region: "fsn1",
+  endpoint: "https://fsn1.your-objectstorage.com",
 };
 
-describe("Hetzner S3 SigV4", () => {
+describe("S3 SigV4", () => {
   test("signs a deterministic regional S3 request without exposing the secret", () => {
     const signed = signS3Request({
       method: "GET",
@@ -50,13 +59,13 @@ describe("Hetzner S3 SigV4", () => {
   });
 });
 
-describe("Hetzner S3 bucket behavior", () => {
+describe("S3 bucket behavior", () => {
   test("parses and sorts ListBuckets XML", () => {
     const xml = `<?xml version="1.0"?><ListAllMyBucketsResult><Buckets>
       <Bucket><Name>zeta</Name><CreationDate>2026-08-01T10:00:00Z</CreationDate></Bucket>
       <Bucket><Name>alpha&amp;archive</Name><CreationDate>2026-07-01T10:00:00Z</CreationDate></Bucket>
     </Buckets></ListAllMyBucketsResult>`;
-    expect(parseListBuckets(xml, "fsn1")).toEqual([
+    expect(parseListBuckets(xml, credentials)).toEqual([
       { name: "alpha&archive", createdAt: "2026-07-01T10:00:00Z", region: "fsn1", endpoint: "https://fsn1.your-objectstorage.com" },
       { name: "zeta", createdAt: "2026-08-01T10:00:00Z", region: "fsn1", endpoint: "https://fsn1.your-objectstorage.com" },
     ]);
@@ -79,8 +88,28 @@ describe("Hetzner S3 bucket behavior", () => {
     } catch (caught) {
       error = caught;
     }
-    expect(error).toBeInstanceOf(HetznerS3Error);
-    expect((error as HetznerS3Error).code).toBe("BucketNotEmpty");
+    expect(error).toBeInstanceOf(S3Error);
+    expect((error as S3Error).code).toBe("BucketNotEmpty");
     expect((error as Error).message).toContain("never recursively deletes objects");
+  });
+});
+
+describe("S3 provider selection", () => {
+  test("loads credentials only from the assigned S3-compatible profile", async () => {
+    saveProviderConnections([{
+      id: "s3-main",
+      kind: "s3-compatible",
+      name: "Any S3 provider",
+      config: { endpoint: credentials.endpoint, region: credentials.region },
+      created_at: "2026-09-04T00:00:00.000Z",
+    }]);
+    saveProviderAssignments({ infrastructure: "", object_storage: "s3-main" });
+    await secretStore.set(providerSecretKey("s3-main", "access_key"), credentials.accessKey);
+    await secretStore.set(providerSecretKey("s3-main", "secret_key"), credentials.secretKey);
+    expect(await getS3Credentials()).toEqual(credentials);
+  });
+
+  test("returns null when object storage has no assigned provider", async () => {
+    expect(await getS3Credentials()).toBeNull();
   });
 });

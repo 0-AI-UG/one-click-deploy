@@ -30,6 +30,8 @@ function freshServer(name: string) {
     type: "cx23",
     location: "nbg1",
     status: "ready",
+    provider: "hetzner",
+    ownership: "managed",
   });
 }
 

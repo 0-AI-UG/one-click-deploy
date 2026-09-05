@@ -29,6 +29,7 @@ export type AppRow = {
   created_at: string;
   volume_id: string;
   volume_mount: string;
+  volume_driver: string;
   /** 0 = volume was CREATED by us (deleted on destroy); 1 = an EXISTING volume
    *  ATTACHED via attach_existing_volume (detached-not-deleted on destroy). */
   volume_attached: number;
@@ -38,6 +39,7 @@ export type AppRow = {
   desired_volume_id: string;
   desired_volume_size: number;
   desired_volume_path: string;
+  desired_volume_driver: string;
   /** htpasswd bcrypt hash of the app password for Traefik's basicAuth
    *  middleware. This hash is the sole source of truth for "auth on" — non-empty
    *  ⇔ basic auth enabled. The plaintext is never stored (write-only at the API).
@@ -148,7 +150,7 @@ export function vipFromIndex(index: number): string {
 
 /** Public raw TCP/UDP exposure pool: Traefik entrypoints are static-config-
  *  only, so the two 50-port blocks are pre-reserved fleet-wide (see
- *  traefikStaticConfig) and opened in the base Hetzner firewall rules. */
+ *  traefikStaticConfig) and opened by compatible provider firewall rules. */
 export const PUBLIC_TCP_PORT_BASE = 30000;
 export const PUBLIC_TCP_PORT_COUNT = 50;
 export const PUBLIC_UDP_PORT_BASE = 30050;
@@ -352,6 +354,7 @@ type InsertAppFields = {
   desired_volume_id?: string;
   desired_volume_size?: number;
   desired_volume_path?: string;
+  desired_volume_driver?: string;
   command?: string[];
   cap_add?: string[];
   post_start_command?: string;
@@ -388,7 +391,7 @@ function insertAppRow(app: InsertAppFields): AppRow {
   const internalProtocol: InternalProtocol = app.internal_protocol ?? "http";
   return db
     .query(
-      "INSERT INTO apps (name, domain, image_ref, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, health_check_expected_statuses, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of, desired_volume_id, desired_volume_size, desired_volume_path, command_json, cap_add_json, post_start_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO apps (name, domain, image_ref, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, health_check_expected_statuses, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of, desired_volume_id, desired_volume_size, desired_volume_path, desired_volume_driver, command_json, cap_add_json, post_start_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       app.name,
@@ -427,6 +430,7 @@ function insertAppRow(app: InsertAppFields): AppRow {
       app.desired_volume_id ?? "",
       app.desired_volume_size ?? 0,
       app.desired_volume_path ?? "/data",
+      app.desired_volume_driver ?? "",
       JSON.stringify(app.command ?? []),
       JSON.stringify(app.cap_add ?? []),
       app.post_start_command ?? "",
@@ -493,7 +497,15 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
   // infrastructure reconciler so a transient provider error never makes the
   // DB forget a still-live server. Stopped replicas count as present because
   // they anchor the light-sleep fast wake path.
-  const { clearServerGcRequest, requestServerGc } = await import("./servers.ts");
+  const { clearServerGcRequest, getServer, requestServerGc } = await import("./servers.ts");
+  const server = getServer(serverId);
+  // Operator-owned hosts are durable fleet enrollment, not disposable
+  // capacity. They remain connected until an operator explicitly removes
+  // them, even after their last app is destroyed.
+  if (!server || server.ownership === "connected") {
+    clearServerGcRequest(serverId);
+    return;
+  }
   if (hasAnyReplicas(serverId)) {
     clearServerGcRequest(serverId);
     return;
@@ -717,18 +729,24 @@ export function updateAppDomain(id: number, domain: string): void {
  *  default) = a volume we CREATED (deleted on destroy); true = an EXISTING volume
  *  ATTACHED via attach_existing_volume (detached-not-deleted on destroy). Callers
  *  that CLEAR the volume (empty ids) leave attached at its harmless default. */
-export function updateAppVolume(id: number, volumeId: string, volumeMount: string, attached = false): void {
-  db.query("UPDATE apps SET volume_id = ?, volume_mount = ?, volume_attached = ? WHERE id = ?")
-    .run(volumeId, volumeMount, attached ? 1 : 0, id);
+export function updateAppVolume(
+  id: number,
+  volumeId: string,
+  volumeMount: string,
+  attached = false,
+  driverId = "",
+): void {
+  db.query("UPDATE apps SET volume_id = ?, volume_mount = ?, volume_attached = ?, volume_driver = ? WHERE id = ?")
+    .run(volumeId, volumeMount, attached ? 1 : 0, volumeId ? driverId : "", id);
 }
 
 export function updateAppDesiredVolume(
   id: number,
-  desired: { volumeId: string; sizeGb: number; mountPath: string },
+  desired: { volumeId: string; sizeGb: number; mountPath: string; driverId?: string },
 ): void {
   db.query(
-    "UPDATE apps SET desired_volume_id = ?, desired_volume_size = ?, desired_volume_path = ? WHERE id = ?",
-  ).run(desired.volumeId, desired.sizeGb, desired.mountPath, id);
+    "UPDATE apps SET desired_volume_id = ?, desired_volume_size = ?, desired_volume_path = ?, desired_volume_driver = ? WHERE id = ?",
+  ).run(desired.volumeId, desired.sizeGb, desired.mountPath, desired.driverId ?? "", id);
 }
 
 export function updateAppExtraVolumes(id: number, extraVolumes: string[]): void {

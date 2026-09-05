@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
-import { hetzner } from "../../shared/providers/index.ts";
 import { isNotFoundError } from "../../shared/providers/errors.ts";
 import { recreateAppContainer } from "../deploy/index.ts";
+import { defaultStorageDriverForServer, requireStorageDriver } from "../storage/index.ts";
 import { registerOp } from "./registry.ts";
 import {
   loadSingleReplicaTarget,
@@ -11,17 +11,17 @@ import {
 } from "./_volumes.ts";
 import { FatalProbeError, type OpKindDefinition, type Step } from "../types.ts";
 
-// Create a brand-new Hetzner volume and attach it to the app's single replica.
+// Create a brand-new volume and attach it to the app's single replica.
 // Every step past validation has a compensation, so any failure — including a
 // failed container recreate — rolls the whole thing back: the DB volume is
 // cleared, the scaling floor is restored, the bind mount is removed and the
 // cloud volume is detached + deleted.
 
-type AttachVolumeInput = { appId: number; sizeGb: number; mountPath?: string };
+type AttachVolumeInput = { appId: number; sizeGb: number; mountPath?: string; driverId?: string };
 
-type CreateVolumeOut = { volumeId: string; hostMountPath: string; volName: string };
+type CreateVolumeOut = { volumeId: string; driverId: string; hostMountPath: string; volName: string };
 type AttachToAppOut = { priorMinReplicas: number; priorMaxReplicas: number; volumeMount: string };
-type ValidateOut = SingleReplicaTarget & { priorMinReplicas: number; priorMaxReplicas: number };
+type ValidateOut = SingleReplicaTarget & { priorMinReplicas: number; priorMaxReplicas: number; driverId: string };
 
 const validate: Step<AttachVolumeInput, ValidateOut> = {
   name: "validate",
@@ -29,8 +29,16 @@ const validate: Step<AttachVolumeInput, ValidateOut> = {
   async run(ctx) {
     const target = loadSingleReplicaTarget(ctx.input.appId, { requireNoVolume: true });
     const app = db.getApp(ctx.input.appId)!;
+    const server = db.getServer(target.serverId)!;
+    const driver = ctx.input.driverId
+      ? requireStorageDriver(ctx.input.driverId)
+      : defaultStorageDriverForServer(server);
+    if (!driver.supports(server)) {
+      throw new Error(`Storage driver ${driver.id} does not support server ${server.name}`);
+    }
     return {
       ...target,
+      driverId: driver.id,
       priorMinReplicas: app.min_replicas,
       priorMaxReplicas: app.max_replicas,
     };
@@ -48,11 +56,14 @@ const createVolume: Step<AttachVolumeInput, CreateVolumeOut> = {
   name: "create_volume",
   label: "Create volume",
   async probe(ctx, prior) {
-    const target = prior["validate"] as SingleReplicaTarget;
+    const target = prior["validate"] as ValidateOut;
+    const server = db.getServer(target.serverId);
+    if (!server) throw new FatalProbeError("Server disappeared while creating volume");
+    const driver = requireStorageDriver(target.driverId);
     const volName = volumeName(target, ctx.opId);
     let all;
     try {
-      all = await hetzner.volumes.list();
+      all = await driver.list(server);
     } catch (error) {
       throw new FatalProbeError(
         `Cannot verify whether operation-owned volume ${volName} already exists; refusing to create a possible duplicate`,
@@ -62,48 +73,56 @@ const createVolume: Step<AttachVolumeInput, CreateVolumeOut> = {
     const existing = all.find((v) => v.name === volName);
     if (!existing) return null;
     const retired = db.getRetiredVolumes().find(
-      (row) => row.provider_volume_id === existing.providerId,
+      (row) => row.provider_volume_id === existing.id && row.driver_id === driver.id,
     );
     if (retired) {
       throw new FatalProbeError(
-        `Refusing to adopt retained volume ${existing.providerId} (${volName}); ` +
+        `Refusing to adopt retained volume ${existing.id} (${volName}); ` +
         `it belongs to ${retired.former_resource_type}:${retired.former_resource_name}. ` +
         "Attach it explicitly as an existing volume or permanently delete it first.",
       );
     }
     if (
       existing.sizeGb !== ctx.input.sizeGb ||
-      existing.location !== target.serverLocation ||
-      (existing.serverId != null && existing.serverId !== target.providerServerId)
+      (driver.portable && existing.location !== target.serverLocation) ||
+      (existing.attachedServerId != null &&
+        existing.attachedServerId !== target.providerServerId &&
+        existing.attachedServerId !== String(target.serverId))
     ) {
       throw new FatalProbeError(
-        `Volume name collision for ${volName}: provider volume ${existing.providerId} ` +
+        `Volume name collision for ${volName}: storage volume ${existing.id} ` +
         `does not match the requested size/location/server. Refusing implicit adoption.`,
       );
     }
-    ctx.log(`adopting existing volume ${existing.providerId} (${volName})`);
-    return { volumeId: existing.providerId, hostMountPath: `/mnt/${volName}`, volName };
+    ctx.log(`adopting existing volume ${existing.id} (${volName})`);
+    return { volumeId: existing.id, driverId: driver.id, hostMountPath: existing.hostPath, volName };
   },
   async run(ctx, prior) {
-    const target = prior["validate"] as SingleReplicaTarget;
+    const target = prior["validate"] as ValidateOut;
+    const server = db.getServer(target.serverId);
+    if (!server) throw new Error("Server not found");
+    const driver = requireStorageDriver(target.driverId);
     const volName = volumeName(target, ctx.opId);
-    const vol = await hetzner.volumes.create({
+    const vol = await driver.create({
+      server,
       name: volName,
       sizeGb: ctx.input.sizeGb,
-      serverId: target.providerServerId,
-      location: target.serverLocation,
     });
-    ctx.log(`Created volume ${vol.providerId} (${volName}, ${ctx.input.sizeGb}GB)`);
-    return { volumeId: vol.providerId, hostMountPath: `/mnt/${volName}`, volName };
+    ctx.log(`Created volume ${vol.id} with ${driver.id} (${volName}, ${ctx.input.sizeGb}GB)`);
+    return { volumeId: vol.id, driverId: driver.id, hostMountPath: vol.hostPath, volName };
   },
-  async compensate(ctx, out) {
+  async compensate(ctx, out, prior) {
     if (!out) return;
-    try { await hetzner.volumes.detach(out.volumeId); } catch (err) {
+    const target = prior["validate"] as ValidateOut | undefined;
+    const server = target ? db.getServer(target.serverId) ?? undefined : undefined;
+    const driver = requireStorageDriver(out.driverId);
+    try { await driver.detach(out.volumeId, server); } catch (err) {
       if (!isNotFoundError(err)) throw err;
     }
     const app = db.getApp(ctx.input.appId);
     db.retireVolume({
       providerVolumeId: out.volumeId,
+      driverId: out.driverId,
       formerResourceType: "app",
       formerResourceId: ctx.input.appId,
       formerResourceName: app?.name ?? `app-${ctx.input.appId}`,
@@ -125,8 +144,8 @@ const bindMount: Step<AttachVolumeInput, { ok: true }> = {
     const target = prior["validate"] as SingleReplicaTarget;
     const vol = prior["create_volume"] as CreateVolumeOut;
     await ensureBindMount({
-      serverIp: target.serverIp,
-      hostKey: target.hostKey,
+      serverId: target.serverId,
+      driverId: vol.driverId,
       volumeId: vol.volumeId,
       hostMountPath: vol.hostMountPath,
       appId: ctx.input.appId,
@@ -138,8 +157,9 @@ const bindMount: Step<AttachVolumeInput, { ok: true }> = {
     const vol = prior["create_volume"] as CreateVolumeOut | undefined;
     if (!target || !vol) return;
     await removeBindMountBestEffort({
-      serverIp: target.serverIp,
-      hostKey: target.hostKey,
+      serverId: target.serverId,
+      driverId: vol.driverId,
+      volumeId: vol.volumeId,
       hostMountPath: vol.hostMountPath,
       appId: ctx.input.appId,
     });
@@ -183,7 +203,7 @@ const attachToApp: Step<AttachVolumeInput, AttachToAppOut> = {
     const volumeMount = `${vol.hostMountPath}:${containerPath}`;
     const priorMinReplicas = before?.priorMinReplicas ?? app.min_replicas;
     const priorMaxReplicas = before?.priorMaxReplicas ?? app.max_replicas;
-    db.updateAppVolume(ctx.input.appId, vol.volumeId, volumeMount);
+    db.updateAppVolume(ctx.input.appId, vol.volumeId, volumeMount, false, vol.driverId);
     // A volume locks the app to a single server: force min/max replicas to 1
     // so autoscale + manual scaling cannot ever bring up replica 2+.
     db.updateAppScaling(ctx.input.appId, { min_replicas: Math.min(1, app.min_replicas), max_replicas: 1 });

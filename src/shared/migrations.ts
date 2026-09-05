@@ -2713,7 +2713,8 @@ export function runMigrations(db: Database): void {
       db.run("ROLLBACK");
       log("run", `Migration ${migration.version} failed:`, err);
       throw new Error(
-        `Database migration failed (${migration.description}). The app may need to be reinstalled if this persists.`
+        `Database migration failed (${migration.description}): ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
       );
     } finally {
       if (migration.disableForeignKeys) {

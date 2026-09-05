@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { get } from "../api/client.ts";
 import { getToken } from "../stores/auth.ts";
 
@@ -15,20 +15,24 @@ export function useServerTypes() {
   const [serverTypes, setServerTypes] = useState<ServerType[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     // The endpoint requires auth and a configured provider token, so skip during
     // initial setup — otherwise the 401 triggers a redirect loop on /setup.
     if (!getToken()) {
       setLoading(false);
       return;
     }
-    get("/api/admin/settings/server-types")
-      .then((data) => setServerTypes((data as { server_types?: ServerType[] }).server_types ?? []))
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    setLoading(true);
+    try {
+      const data = await get("/api/admin/settings/server-types");
+      setServerTypes((data as { server_types?: ServerType[] }).server_types ?? []);
+    } catch { /* keep the last known list */ }
+    finally { setLoading(false); }
   }, []);
 
-  return { serverTypes, loading };
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  return { serverTypes, loading, refresh };
 }
 
 export function typeOptions(types: ServerType[]) {

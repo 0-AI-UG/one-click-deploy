@@ -3,6 +3,7 @@ import path from "path";
 import { mkdirSync, existsSync, rmSync, readdirSync } from "fs";
 import { runMigrations, migrations } from "../migrations.ts";
 import { DATA_DIR } from "../paths.ts";
+import { CURRENT_SCHEMA_VERSION, initializeCurrentSchema } from "./current-schema.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [db:${context}]`, ...args);
@@ -13,10 +14,30 @@ export function createDatabase(dbPathOrMemory: string): Database {
   instance.run("PRAGMA journal_mode = WAL");
   instance.run("PRAGMA foreign_keys = ON");
   instance.run("PRAGMA busy_timeout = 5000");
-  initSchema(instance);
-  backupBeforeMigrating(instance, dbPathOrMemory);
-  runMigrations(instance);
+  if (isUninitialized(instance)) {
+    initializeCurrentSchema(instance);
+  } else {
+    initLegacySchema(instance);
+    backupBeforeMigrating(instance, dbPathOrMemory);
+    runMigrations(instance);
+    assertCurrentSchema(instance);
+  }
   return instance;
+}
+
+function isUninitialized(instance: Database): boolean {
+  return !instance.query(`SELECT 1 FROM sqlite_master
+    WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1`).get();
+}
+
+function assertCurrentSchema(instance: Database): void {
+  const version = currentSchemaVersion(instance);
+  if (version !== CURRENT_SCHEMA_VERSION) {
+    throw new Error(
+      `Database schema ${version} is not supported by this clean-cut release (expected ${CURRENT_SCHEMA_VERSION}). ` +
+      "Run the release-specific offline cutover before starting the panel.",
+    );
+  }
 }
 
 /** Snapshot the DB whenever a migration is about to run.
@@ -78,7 +99,8 @@ function pruneOldBackups(dbPath: string): void {
   }
 }
 
-function initSchema(instance: Database) {
+/** Bootstrap only the historical migration chain for an existing old database. */
+function initLegacySchema(instance: Database) {
   instance.run(`CREATE TABLE IF NOT EXISTS servers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -89,7 +111,7 @@ function initSchema(instance: Database) {
     location TEXT NOT NULL DEFAULT 'nbg1',
     status TEXT NOT NULL DEFAULT 'provisioning',
     private_ipv4 TEXT NOT NULL DEFAULT '',
-    provider TEXT NOT NULL DEFAULT 'external',
+    provider TEXT NOT NULL DEFAULT '',
     ownership TEXT NOT NULL DEFAULT 'connected',
     management_address TEXT NOT NULL DEFAULT '',
     ssh_user TEXT NOT NULL DEFAULT 'root',

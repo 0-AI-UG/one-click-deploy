@@ -1,6 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
-import { hetzner } from "../../shared/providers/index.ts";
+import { requireStorageDriver } from "../storage/index.ts";
 import {
   sshExec,
   removeContainer,
@@ -77,21 +77,18 @@ export async function destroyAppCore(appId: number): Promise<{ ok: boolean; erro
     // predates us (may hold data we don't own), so it is detached-not-deleted.
     if (app.volume_id) {
       try {
-        const compute = hetzner;
-        if (app.volume_attached) {
-          await compute.volumes?.detach(app.volume_id);
-          log("destroyApp", `Detached pre-existing volume ${app.volume_id}`);
-        } else {
-          await compute.volumes?.detach(app.volume_id);
-          db.retireVolume({
-            providerVolumeId: app.volume_id,
-            formerResourceType: "app",
-            formerResourceId: app.id,
-            formerResourceName: app.name,
-            reason: "app destroyed through server cleanup",
-          });
-          log("destroyApp", `Detached volume ${app.volume_id}; retained for recovery for 7 days`);
-        }
+        const serverId = replicas[0]?.server_id ?? [...affectedServerIds][0];
+        const server = serverId == null ? undefined : db.getServer(serverId) ?? undefined;
+        await requireStorageDriver(app.volume_driver).detach(app.volume_id, server);
+        db.retireVolume({
+          providerVolumeId: app.volume_id,
+          driverId: app.volume_driver,
+          formerResourceType: "app",
+          formerResourceId: app.id,
+          formerResourceName: app.name,
+          reason: "app destroyed through server cleanup",
+        });
+        log("destroyApp", `Detached volume ${app.volume_id}; retained for recovery for 7 days`);
       } catch (err) {
         log("destroyApp", `Failed to release volume ${app.volume_id}:`, err instanceof Error ? err.message : err);
         cleanupFailed = true;

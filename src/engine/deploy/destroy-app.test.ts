@@ -7,9 +7,6 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 // imports resolve to the mocks.
 
 const compute = makeFakeComputeProvider();
-mock.module("../../shared/providers/index.ts", () => ({
-  hetzner: compute,
-}));
 
 const sshExec = mock(async (..._args: unknown[]) => ({ exitCode: 0, stdout: "", stderr: "" }));
 const removeContainer = mock(async (..._args: unknown[]) => {});
@@ -40,6 +37,7 @@ mock.module("../../shared/github.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
+import { __replaceInfrastructureProvidersForTest } from "../../shared/providers/registry.ts";
 import { destroyApp } from "./lifecycle.ts";
 import { enqueueOperation, listChildOperations, markOperationFinished } from "../../shared/db/operations.ts";
 import destroyServerOp from "../ops/destroy-server.ts";
@@ -111,6 +109,20 @@ function freshServer() {
   });
 }
 
+function freshConnectedServer() {
+  return db.insertServer({
+    name: `connected-${randomSuffix()}`,
+    provider_id: "",
+    ipv4: "1.2.3.4",
+    ipv6: "",
+    type: "external",
+    location: "external",
+    status: "ready",
+    provider: "",
+    ownership: "connected",
+  });
+}
+
 function freshApp() {
   return db.insertApp({
     name: `app-${randomSuffix()}`,
@@ -132,6 +144,7 @@ function attachReplica(appId: number, serverId: number, name: string) {
 }
 
 beforeEach(() => {
+  __replaceInfrastructureProvidersForTest([compute]);
   sshExec.mockClear();
   removeContainer.mockClear();
   syncAllTraefik.mockClear();
@@ -180,7 +193,7 @@ describe("destroyApp: volume cleanup", () => {
     const server = freshServer();
     const app = freshApp();
     attachReplica(app.id, server.id, app.name);
-    db.updateAppVolume(app.id, "vol-abc", "/data");
+    db.updateAppVolume(app.id, "vol-abc", "/data", false, "hetzner-block");
 
     await destroyApp(app.id);
 
@@ -194,7 +207,7 @@ describe("destroyApp: volume cleanup", () => {
     const app = freshApp();
     attachReplica(app.id, server.id, app.name);
     // attached=true marks a pre-existing volume attached via attach_existing_volume.
-    db.updateAppVolume(app.id, "vol-preexisting", "/data", true);
+    db.updateAppVolume(app.id, "vol-preexisting", "/data", true, "hetzner-block");
 
     await destroyApp(app.id);
 
@@ -230,7 +243,7 @@ describe("destroyApp: partial failure handling", () => {
     const server = freshServer();
     const app = freshApp();
     attachReplica(app.id, server.id, app.name);
-    db.updateAppVolume(app.id, "vol-err", "/data");
+    db.updateAppVolume(app.id, "vol-err", "/data", false, "hetzner-block");
     compute._mocks.volumeDetach.mockImplementationOnce(async () => { throw new Error("detach failed"); });
     const result = await destroyApp(app.id);
     expect(result.ok).toBe(false);
@@ -286,6 +299,17 @@ describe("destroyApp: multi-server GC", () => {
     expect(db.getServer(panelSrv.id)).toBeTruthy();
     expect(compute._mocks.deleteServer).not.toHaveBeenCalled();
     db.deletePanel();
+  });
+
+  test("keeps an operator-owned host enrolled when its last app is destroyed", async () => {
+    const server = freshConnectedServer();
+    const app = freshApp();
+    attachReplica(app.id, server.id, app.name);
+
+    await destroyApp(app.id);
+
+    expect(db.getServer(server.id)).toBeTruthy();
+    expect(db.getServer(server.id)?.gc_requested_at).toBeNull();
   });
 });
 
@@ -357,5 +381,24 @@ describe("destroyServer", () => {
     const result = await destroyServer(999_999);
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/not found/i);
+  });
+
+  test("refuses to forget a connected host with retained server-local data", async () => {
+    const server = freshConnectedServer();
+    const volumeId = `local:${server.id}:retained-data`;
+    db.retireVolume({
+      providerVolumeId: volumeId,
+      driverId: "local-directory",
+      formerResourceType: "app",
+      formerResourceId: 1,
+      formerResourceName: "retained-app",
+      reason: "test",
+    });
+
+    const result = await destroyServer(server.id);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/server-local volumes/i);
+    expect(db.getServer(server.id)).toBeTruthy();
   });
 });

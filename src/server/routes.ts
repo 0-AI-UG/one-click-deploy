@@ -111,6 +111,13 @@ import {
   handlePutRegistryConnection,
   handlePutSourceConnection,
 } from "./routes/readiness.ts";
+import {
+  handleCreateProvider,
+  handleDeleteProvider,
+  handleGetProviders,
+  handleSaveProviderAssignments,
+  handleUpdateProvider,
+} from "./routes/providers.ts";
 
 function appIdFrom(req: Request): number {
   const url = new URL(req.url);
@@ -128,6 +135,11 @@ function userIdFrom(req: Request): string {
   const url = new URL(req.url);
   const match = url.pathname.match(/\/api\/admin\/users\/([^/]+)/);
   return match ? match[1] : "";
+}
+
+function providerIdFrom(req: Request): string {
+  const match = new URL(req.url).pathname.match(/\/api\/admin\/providers\/([^/]+)/);
+  return match ? decodeURIComponent(match[1]) : "";
 }
 
 function serverIdFrom(req: Request): number {
@@ -322,6 +334,17 @@ export const apiRoutes = {
     PUT: (req: Request) => handleSaveSettings(req),
   },
   "/api/admin/settings/server-types": { GET: (req: Request) => handleGetServerTypes(req) },
+  "/api/admin/providers": {
+    GET: (req: Request) => handleGetProviders(req),
+    POST: (req: Request) => handleCreateProvider(req),
+  },
+  "/api/admin/providers/assignments": {
+    PUT: (req: Request) => handleSaveProviderAssignments(req),
+  },
+  "/api/admin/providers/:providerId": {
+    PUT: (req: Request) => handleUpdateProvider(req, providerIdFrom(req)),
+    DELETE: (req: Request) => handleDeleteProvider(req, providerIdFrom(req)),
+  },
   "/api/admin/connections": { GET: (req: Request) => handleGetConnections(req) },
   "/api/admin/connections/registry": {
     PUT: (req: Request) => handlePutRegistryConnection(req),

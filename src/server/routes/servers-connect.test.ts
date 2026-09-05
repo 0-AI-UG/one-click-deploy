@@ -4,16 +4,12 @@ import {
   handleGetServerEnrollmentKey,
   isIpv4,
   isPinnedEd25519HostKey,
-  isPrivateIpv4,
 } from "./servers.ts";
 
 describe("external server enrollment validation", () => {
-  test("requires an RFC1918 private route", () => {
+  test("accepts any valid IPv4 fleet route", () => {
     expect(isIpv4("203.0.113.10")).toBe(true);
-    expect(isPrivateIpv4("10.42.0.8")).toBe(true);
-    expect(isPrivateIpv4("172.20.1.8")).toBe(true);
-    expect(isPrivateIpv4("192.168.1.8")).toBe(true);
-    expect(isPrivateIpv4("203.0.113.10")).toBe(false);
+    expect(isIpv4("10.42.0.8")).toBe(true);
     expect(isIpv4("999.1.1.1")).toBe(false);
   });
 

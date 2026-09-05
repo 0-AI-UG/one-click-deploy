@@ -58,6 +58,7 @@ review deletion audit records, or permanently delete
 an unused volume. The browser shows manifest intent and observed attachment as
 separate read-only state; it has no volume controls.
 
-OCD-managed volumes require managed Hetzner servers. Externally connected
-servers accept stateless app containers only; placement and replica migration
-fail before mutation if a volume or host mount would land on one.
+Managed provider hosts use their compatible block-storage driver. Externally
+connected hosts use persistent server-local directories under
+`/var/lib/ocd/volumes`. Server-local volumes and explicit host mounts cannot be
+migrated to another server; placement and migration fail before mutation.

@@ -39,7 +39,7 @@ test("proxy cache cleanup only targets versioned binaries from old revisions", (
   expect(isSupersededProxyBinary("operator-backup", "bbbbbbbbbbbb")).toBe(false);
 });
 
-function makeServer(ipv4: string, privateIpv4: string) {
+function makeServer(ipv4: string, routingAddress: string) {
   return db.insertServer({
     name: `srv-pm-${randomSuffix()}`,
     provider_id: `h-pm-${randomSuffix()}`,
@@ -48,7 +48,7 @@ function makeServer(ipv4: string, privateIpv4: string) {
     type: "cx22",
     location: "fsn1",
     status: "ready",
-    private_ipv4: privateIpv4,
+    routing_address: routingAddress,
   });
 }
 

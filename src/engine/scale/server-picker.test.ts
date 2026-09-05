@@ -22,7 +22,7 @@ const provisionServer = mock(async (opts: { name: string; location?: string; ser
   location: opts.location ?? "fsn1",
   status: "ready",
   ssh_host_key: "",
-  private_ipv4: "10.0.9.9",
+  routing_address: "10.0.9.9",
   pool: opts.pool ?? "general",
   created_at: new Date().toISOString(),
 }));

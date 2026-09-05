@@ -1,13 +1,9 @@
-import { useTempDataDir, makeFakeComputeProvider, randomSuffix } from "../../shared/test-helpers.ts";
+import { useTempDataDir, makeFakeComputeProvider, randomSuffix, configureTestInfrastructureProvider } from "../../shared/test-helpers.ts";
 useTempDataDir();
 
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
-// Providers must be mocked before importing deploy.ts (static imports).
 const compute = makeFakeComputeProvider();
-mock.module("../../shared/providers/index.ts", () => ({
-  hetzner: compute,
-}));
 
 // provisionServer is only called when no ready server exists. Stub it.
 const provisionServer = mock(async (opts: { name: string }) => ({
@@ -72,6 +68,7 @@ mock.module("../../shared/github.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
+import { __replaceInfrastructureProvidersForTest } from "../../shared/providers/index.ts";
 import deployOp, { appVolumeName, resolveAppDomain } from "./deploy.ts";
 import redeployOp from "./redeploy.ts";
 import rollbackOp from "./rollback.ts";
@@ -112,6 +109,8 @@ async function primeAttestation(app: db.AppRow): Promise<void> {
 }
 
 beforeEach(() => {
+  __replaceInfrastructureProvidersForTest([compute]);
+  configureTestInfrastructureProvider(compute.id);
   provisionServer.mockClear();
   compute._mocks.volumeCreate.mockClear();
   compute._mocks.volumeDelete.mockClear();
@@ -285,6 +284,7 @@ describe("deploy step: create_volume", () => {
     const name = appVolumeName(req.app_name, ctx.opId);
     db.retireVolume({
       providerVolumeId: "vol-retained-app",
+      driverId: "hetzner-block",
       formerResourceType: "app",
       formerResourceId: 0,
       formerResourceName: req.app_name,
@@ -332,6 +332,7 @@ describe("deploy step: create_volume", () => {
     const { ctx } = makeCtx({});
     await step.compensate!(ctx, {
       volumeId: "v-abc",
+      driverId: "hetzner-block",
       volumeMount: "/mnt/x:/data",
       containerPath: "/data",
       attached: false,
@@ -347,6 +348,7 @@ describe("deploy step: create_volume", () => {
     const detachCallsBefore = compute._mocks.volumeDetach.mock.calls.length;
     await step.compensate!(ctx, {
       volumeId: "v-existing",
+      driverId: "hetzner-block",
       volumeMount: "/mnt/vol-v-existing:/data",
       containerPath: "/data",
       attached: true,
@@ -362,6 +364,7 @@ describe("deploy step: create_volume", () => {
     await expect(
       step.compensate!(ctx, {
         volumeId: "v-xyz",
+        driverId: "hetzner-block",
         volumeMount: "",
         containerPath: "/d",
         attached: false,
@@ -383,7 +386,7 @@ function setupDeployedApp(healthCheckFlag: boolean) {
     type: "cx22",
     location: "fsn1",
     status: "ready",
-    private_ipv4: "10.0.0.2",
+    routing_address: "10.0.0.2",
   });
   const name = `hc-${randomSuffix()}`;
   const { app, replica } = db.insertAppWithFirstReplica(
@@ -561,7 +564,7 @@ describe("deploy: private apps", () => {
       type: "cx22",
       location: "fsn1",
       status: "ready",
-      private_ipv4: "10.0.0.3",
+      routing_address: "10.0.0.3",
     });
   }
 
@@ -614,7 +617,7 @@ describe("deploy: private apps", () => {
       name: `srv-${randomSuffix()}`,
       provider_id: `h-${randomSuffix()}`,
       ipv4: "10.0.0.10",
-      private_ipv4: "10.0.0.10",
+      routing_address: "10.0.0.10",
       ipv6: "",
       type: "cx22",
       location: "fsn1",
@@ -655,7 +658,7 @@ describe("deploy: private apps", () => {
       name: `srv-${randomSuffix()}`,
       provider_id: `h-${randomSuffix()}`,
       ipv4: "10.0.0.11",
-      private_ipv4: "10.0.0.11",
+      routing_address: "10.0.0.11",
       ipv6: "",
       type: "cx22",
       location: "fsn1",
@@ -706,7 +709,7 @@ describe("deploy: auto-domains", () => {
       type: "cx22",
       location: "fsn1",
       status: "ready",
-      private_ipv4: "10.0.0.4",
+      routing_address: "10.0.0.4",
     });
   }
 
@@ -820,7 +823,7 @@ describe("deploy step: insert_app_row deploy targets", () => {
       type: "cx22",
       location: "fsn1",
       status: "ready",
-      private_ipv4: "10.0.0.5",
+      routing_address: "10.0.0.5",
     });
   }
 
@@ -977,7 +980,7 @@ describe("contract: engine deploy back-compat shim for legacy env_label/sibling_
       type: "cx22",
       location: "fsn1",
       status: "ready",
-      private_ipv4: "10.0.0.6",
+      routing_address: "10.0.0.6",
     });
     const parentName = `legacy-${randomSuffix()}`;
     const parentEnv = db.insertEnvironment(

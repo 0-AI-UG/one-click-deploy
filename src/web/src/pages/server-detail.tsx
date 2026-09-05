@@ -56,7 +56,7 @@ type ServerDetail = {
   provider: string;
   ipv4: string;
   ipv6: string;
-  private_ipv4: string;
+  routing_address: string;
   type: string;
   location: string;
   status: string;
@@ -318,7 +318,7 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
           <Info label="Type" value={detail.type.toUpperCase()} />
           <Info label="Location" value={detail.location} />
           <Info label="Public IPv4" value={detail.ipv4 || "—"} />
-          <Info label="Private IPv4" value={detail.private_ipv4 || "—"} />
+          <Info label="Private IPv4" value={detail.routing_address || "—"} />
           <Info label="€/mo" value={detail.monthly_eur != null ? `€${detail.monthly_eur.toFixed(2)}` : "—"} />
           <Info label="Uptime" value={fmtUptime(detail.host.uptime_seconds)} />
           <Info label="Processes" value={detail.host.processes != null ? String(detail.host.processes) : "—"} />

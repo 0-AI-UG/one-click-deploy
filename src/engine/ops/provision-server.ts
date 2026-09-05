@@ -1,5 +1,8 @@
 import * as db from "../../shared/db.ts";
-import { hetzner } from "../../shared/providers/index.ts";
+import {
+  requireDefaultInfrastructureProvider,
+  infrastructureProviderForServer,
+} from "../../shared/infrastructure.ts";
 import { isNotFoundError } from "../../shared/providers/errors.ts";
 import {
   getOrCreateLocalKeyPair,
@@ -30,7 +33,7 @@ type CreateCloudOut = {
   providerId: string;
   ipv4: string;
   ipv6: string;
-  privateIpv4: string;
+  routingAddress: string;
 };
 
 function operationServerName(input: ProvisionInput, opId: number): string {
@@ -40,20 +43,21 @@ function operationServerName(input: ProvisionInput, opId: number): string {
 async function adoptCloudServerByName(
   row: InsertRowOut,
 ): Promise<CreateCloudOut | null> {
-  const existing = (await hetzner.listServers()).find((server) => server.name === row.serverName);
+  const provider = requireDefaultInfrastructureProvider(db.getSettings());
+  const existing = (await provider.listServers()).find((server) => server.name === row.serverName);
   if (!existing) return null;
-  const detailed = await hetzner.getServer(existing.providerId);
+  const detailed = await provider.getServer(existing.providerId);
   const adopted = {
     providerId: detailed.providerId,
     ipv4: detailed.ipv4,
     ipv6: detailed.ipv6 || "",
-    privateIpv4: detailed.privateIpv4 || "",
+    routingAddress: detailed.routingAddress || "",
   };
   db.updateServer(row.serverId, {
     provider_id: adopted.providerId,
     ipv4: adopted.ipv4,
     ipv6: adopted.ipv6,
-    private_ipv4: adopted.privateIpv4,
+    routing_address: adopted.routingAddress,
     status: "provisioning",
     management_address: adopted.ipv4,
   });
@@ -64,12 +68,12 @@ const ensureInfra: Step<ProvisionInput, EnsureInfraOut> = {
   name: "ensure_infra",
   label: "Ensure SSH key, firewall, network",
   async run(ctx) {
-    const compute = hetzner;
+    const compute = requireDefaultInfrastructureProvider(db.getSettings());
     const { publicKey } = await getOrCreateLocalKeyPair();
     const [sshKey, firewallId, networkId] = await Promise.all([
       compute.ensureSshKey("open-cli-deployment", publicKey),
       compute.ensureFirewall(),
-      ensureSharedNetwork(),
+      ensureSharedNetwork(compute),
     ]);
     ctx.log(`SSH key ${sshKey.name}, firewall ${firewallId}, network ${networkId || "(none)"}`);
     return {
@@ -99,13 +103,13 @@ const insertServerRow: Step<ProvisionInput, InsertRowOut> = {
       type: ctx.input.serverType,
       location: ctx.input.location,
       status: "creating",
-      provider: "hetzner",
+      provider: requireDefaultInfrastructureProvider(db.getSettings()).id,
       ownership: "managed",
       pool: ctx.input.pool || "general",
     });
     return { serverId: row.id, serverName };
   },
-  async compensate(ctx, out) {
+  async compensate(ctx, out, prior) {
     if (!out) return;
     // Delete of an already-gone row is a no-op (so retry is safe); let a
     // genuine failure PROPAGATE rather than orphan the placeholder server row
@@ -125,7 +129,7 @@ const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
         providerId: current.provider_id,
         ipv4: current.ipv4,
         ipv6: current.ipv6,
-        privateIpv4: current.private_ipv4 || "",
+        routingAddress: current.routing_address || "",
       };
     }
     // When provider identity is unknown, creating another server is unsafe;
@@ -143,7 +147,7 @@ const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
   async run(ctx, prior) {
     const infra = prior["ensure_infra"] as EnsureInfraOut;
     const row = prior["insert_server_row"] as InsertRowOut;
-    const compute = hetzner;
+    const compute = requireDefaultInfrastructureProvider(db.getSettings());
 
     // Idempotent replay: if the row already has a provider_id, read back.
     const current = db.getServer(row.serverId);
@@ -152,7 +156,7 @@ const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
         providerId: current.provider_id,
         ipv4: current.ipv4,
         ipv6: current.ipv6,
-        privateIpv4: current.private_ipv4 || "",
+        routingAddress: current.routing_address || "",
       };
     }
 
@@ -178,7 +182,7 @@ const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
       provider_id: created.providerId,
       ipv4: created.ipv4,
       ipv6: created.ipv6 || "",
-      private_ipv4: created.privateIpv4 || "",
+      routing_address: created.routingAddress || "",
       status: "provisioning",
       management_address: created.ipv4,
     });
@@ -187,25 +191,33 @@ const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
       providerId: created.providerId,
       ipv4: created.ipv4,
       ipv6: created.ipv6 || "",
-      privateIpv4: created.privateIpv4 || "",
+      routingAddress: created.routingAddress || "",
     };
   },
-  async compensate(ctx, out) {
+  async compensate(ctx, out, prior) {
     if (!out?.providerId) return;
     // Deleting the cloud server is a real teardown — swallowing a failure would
-    // leak a billable Hetzner server behind a clean `compensated`. Delete is
+    // leak a billable provider server behind a clean `compensated`. Delete is
     // idempotent (an already-gone server is success), but any other failure
     // must PROPAGATE so it surfaces as `compensation_failed`.
     try {
-      await hetzner.deleteServer(out.providerId);
+      const server = db.getServer((prior["insert_server_row"] as InsertRowOut).serverId);
+      const provider = server
+        ? infrastructureProviderForServer(server)
+        : requireDefaultInfrastructureProvider(db.getSettings());
+      await provider.deleteServer(out.providerId);
     } catch (err) {
       if (!isNotFoundError(err)) throw err;
     }
   },
-  async probeCompensated(_ctx, out) {
+  async probeCompensated(_ctx, out, prior) {
     if (!out?.providerId) return true;
     try {
-      await hetzner.getServer(out.providerId);
+      const server = db.getServer((prior["insert_server_row"] as InsertRowOut).serverId);
+      const provider = server
+        ? infrastructureProviderForServer(server)
+        : requireDefaultInfrastructureProvider(db.getSettings());
+      await provider.getServer(out.providerId);
       return false; // still exists — compensate must run
     } catch (err) {
       // Only a definitive not-found means "already deleted". A transient error
@@ -221,7 +233,11 @@ const waitForBoot: Step<ProvisionInput, { ok: true }> = {
   label: "Wait for boot",
   async run(ctx, prior) {
     const cloud = prior["create_cloud_server"] as CreateCloudOut;
-    const compute = hetzner;
+    const row = prior["insert_server_row"] as InsertRowOut;
+    const server = db.getServer(row.serverId);
+    const compute = server
+      ? infrastructureProviderForServer(server)
+      : requireDefaultInfrastructureProvider(db.getSettings());
     await compute.waitForRunning(cloud.providerId, (msg) => ctx.log(msg));
     return { ok: true };
   },

@@ -4,8 +4,9 @@ export type Server = {
   provider_id: string;
   ipv4: string;
   ipv6: string;
-  private_ipv4: string;
-  provider: "hetzner" | "external";
+  routing_address: string;
+  /** Infrastructure adapter id for managed hosts; empty for connected hosts. */
+  provider: string;
   ownership: "managed" | "connected";
   management_address: string;
   ssh_user: string;
@@ -42,6 +43,7 @@ export type App = {
   last_scale_at: string;
   volume_id: string;
   volume_mount: string;
+  volume_driver: string;
   extra_volumes: string; // JSON array of "host:container" strings
   health_check: number; // 1 = HTTP probe (default); 0 = only verify the container is running
   internal_protocol: string; // 'http' | 'tcp' — internal routing protocol (independent of health_check)
@@ -128,6 +130,7 @@ export type DeployRequest = {
   volume_id?: string; // Explicit provider volume to adopt; empty = OCD-managed or none
   volume_size?: number; // Desired GB; 0 = explicitly no primary volume
   volume_path?: string; // Container mount path, defaults to /data
+  volume_driver?: string; // Storage driver id; omitted selects the target server's default
   auth_password?: string; // If set, the ingress enforces HTTP basic auth (username "admin"). Requires internal_protocol 'http' (the default)
   replicas?: number; // Number of replicas (default 1, >1 creates LB)
   autoscale_enabled?: boolean;
@@ -289,7 +292,6 @@ export type ParsedManifest = {
 };
 
 export type Settings = {
-  hetzner_api_token: string;
   default_domain_suffix: string;
   default_server_type: string;
   default_location: string;

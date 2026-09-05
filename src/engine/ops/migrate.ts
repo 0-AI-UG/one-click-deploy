@@ -6,13 +6,13 @@ import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 import { latestDesiredImage } from "../revision.ts";
-import { assertConnectedStatelessWorkload } from "../../shared/infrastructure.ts";
+import { requireStorageDriver } from "../storage/index.ts";
 
 type MigrateInput = { appId: number; replicaId: number; targetServerId: number };
 
 // migrateReplica() is the core routine: it pulls the image, starts on target,
 // stops on source, swaps replica rows, and (for volume apps) detaches/attaches
-// the Hetzner volume with its own internal rollback. Port reservation and
+// the portable storage volume with its own internal rollback. Port reservation and
 // draining happen inside that routine so no traffic is removed before the
 // complete target bind tuple has passed preflight.
 
@@ -34,10 +34,18 @@ const loadAndValidate: Step<MigrateInput, ValidateOut> = {
     if (!app) throw new Error("App not found");
     const source = db.getServer(replica.server_id);
     if (!source) throw new Error("Source server not found");
-    const hasHostMounts = db.parseExtraVolumes(app.extra_volumes).length > 0;
-    const storageRequest = { managedVolume: !!app.volume_id, hostMounts: hasHostMounts };
-    assertConnectedStatelessWorkload(source, storageRequest);
-    assertConnectedStatelessWorkload(target, storageRequest);
+    if (db.parseExtraVolumes(app.extra_volumes).length > 0) {
+      throw new Error("Apps with host-directory mounts cannot migrate between servers");
+    }
+    if (app.volume_id) {
+      const driver = requireStorageDriver(app.volume_driver);
+      if (!driver.portable) {
+        throw new Error(`Volume ${app.volume_id} uses non-portable storage driver ${driver.id}`);
+      }
+      if (!driver.supports(source) || !driver.supports(target)) {
+        throw new Error(`Storage driver ${driver.id} does not support both migration servers`);
+      }
+    }
     if (replica.server_id === ctx.input.targetServerId) {
       throw new Error("Replica is already on the target server");
     }

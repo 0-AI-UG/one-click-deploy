@@ -1,11 +1,10 @@
 import * as db from "../../shared/db.ts";
-import { hetzner } from "../../shared/providers/index.ts";
 import { enqueueOperation, listChildOperations } from "../../shared/db/operations.ts";
 import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import { assertCleanupComplete, softStep, runDbCleanupGate } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
-import { isManagedHetznerServer } from "../../shared/infrastructure.ts";
+import { infrastructureProviderForServer, isManagedServer } from "../../shared/infrastructure.ts";
 
 type DestroyServerInput = { serverId: number };
 
@@ -18,6 +17,18 @@ const preflight: Step<DestroyServerInput, { ok: true }> = {
     }
     const server = db.getServer(ctx.input.serverId);
     if (!server) throw new Error("Server not found");
+    const localVolumePrefix = `local:${server.id}:`;
+    const localApp = db.getApps(server.id).find((app) =>
+      app.volume_driver === "local-directory" && !!app.volume_id
+    );
+    const retainedLocal = db.getRetiredVolumes().find((volume) =>
+      volume.driver_id === "local-directory" && volume.provider_volume_id.startsWith(localVolumePrefix)
+    );
+    if (localApp || retainedLocal) {
+      throw new Error(
+        `Cannot disconnect ${server.name} while server-local volumes are tracked; remove their apps and permanently delete retained volumes first`,
+      );
+    }
     if (db.getBuildWorkerByServerId(ctx.input.serverId)) {
       throw new Error("Remove the OCD build worker before deleting its server");
     }
@@ -81,12 +92,12 @@ const deleteCloudServer: Step<DestroyServerInput, { ok: boolean; error?: string 
   label: "Delete cloud server",
   async run(ctx) {
     const server = db.getServer(ctx.input.serverId);
-    if (!server || !isManagedHetznerServer(server) || !server.provider_id) {
+    if (!server || !isManagedServer(server) || !server.provider_id) {
       if (server?.ownership === "connected") ctx.log(`Disconnecting externally owned server ${server.name}; provider resources are untouched`);
       return { ok: true };
     }
     const r = await softStep(ctx, "delete_cloud_server", async () => {
-      const compute = hetzner;
+      const compute = infrastructureProviderForServer(server);
       await compute.deleteServer(server.provider_id);
     });
     return r.ok ? { ok: true } : { ok: false, error: r.error };

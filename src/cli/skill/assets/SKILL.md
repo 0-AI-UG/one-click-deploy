@@ -119,7 +119,7 @@ ocd ops logs <id> [--tail N] [--since TIME|CURSOR] [--child NAME|ID]
     [--phase STEP] [--follow]
 ocd servers
 ocd servers enrollment-key
-ocd servers connect --name=X --address=X --private-address=X --host-key='...'
+ocd servers connect --name=X --address=X --routing-address=X --host-key='...'
 ocd resources
 ocd volumes
 ocd buckets <list|create|delete>

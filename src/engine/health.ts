@@ -64,7 +64,7 @@ export async function checkReplicaHealth(
   app: AppRow,
   server: ServerRow,
 ): Promise<void> {
-  if (!server.private_ipv4) return;
+  if (!server.routing_address) return;
   const hostKey = server.ssh_host_key || undefined;
   const bindHost = replicaBindHost(server);
   try {

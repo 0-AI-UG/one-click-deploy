@@ -22,7 +22,7 @@ import {
 // temp data dir) is shared across all test files, so names are unique and
 // assertions select their own slice of the render.
 
-function makeServer(privateIpv4 = `10.0.7.${Math.floor(Math.random() * 200) + 2}`) {
+function makeServer(routingAddress = `10.0.7.${Math.floor(Math.random() * 200) + 2}`) {
   return db.insertServer({
     name: `srv-${randomSuffix()}`,
     provider_id: `h-${randomSuffix()}`,
@@ -31,7 +31,7 @@ function makeServer(privateIpv4 = `10.0.7.${Math.floor(Math.random() * 200) + 2}
     type: "cx22",
     location: "fsn1",
     status: "ready",
-    private_ipv4: privateIpv4,
+    routing_address: routingAddress,
   });
 }
 

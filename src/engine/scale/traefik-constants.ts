@@ -63,9 +63,9 @@ export const WAKER_HTTP_PORT = 8896;
  * Returns [] when no private IP is known (nothing to bind to); the next
  * reconciler-driven redeploy backfills it once the network is attached.
  */
-export function wakerPublishFlags(privateIpv4: string): string[] {
-  if (!privateIpv4) return [];
-  return [`-p ${privateIpv4}:${WAKER_HTTP_PORT}:${WAKER_HTTP_PORT}`];
+export function wakerPublishFlags(routingAddress: string): string[] {
+  if (!routingAddress) return [];
+  return [`-p ${routingAddress}:${WAKER_HTTP_PORT}:${WAKER_HTTP_PORT}`];
 }
 
 /** Shared Traefik HTTP service name every sleeping app's HTTP router targets —

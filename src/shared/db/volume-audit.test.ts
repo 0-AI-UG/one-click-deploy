@@ -11,6 +11,7 @@ describe("volume deletion audit", () => {
       actorUserId: "operator-1",
       providerVolumeId: providerId,
       providerVolumeName: "ocd-api-data",
+      driverId: "hetzner-block",
       formerResourceType: "app",
       formerResourceId: 42,
       formerResourceName: "api",
@@ -33,6 +34,7 @@ describe("volume deletion audit", () => {
       actorUserId: "operator-2",
       providerVolumeId: `volume-${randomSuffix()}`,
       providerVolumeName: "important-data",
+      driverId: "hetzner-block",
     });
     db.finishVolumeDeletionAudit(row.id, "provider refused delete");
     const stored = db.getVolumeDeletionAudit().find((item) => item.id === row.id);
