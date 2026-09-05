@@ -306,9 +306,7 @@ const reconcile: Step<WebhookBuildSourceInput, { childIds: number[] }> = {
         build: undefined,
         image_ref: built.refs[app.name],
         git_commit: ctx.input.commit,
-        environment_id: manifest.environment === undefined
-          ? app.environment_id
-          : manifest.environment === null ? null : environmentId(manifest.environment, app.manifest_path),
+        environment_id: manifest.environment == null ? null : environmentId(manifest.environment, app.manifest_path),
         manifest_path: app.manifest_path,
         manifest_hash: manifestHash(raw),
       };
@@ -365,12 +363,12 @@ const reconcile: Step<WebhookBuildSourceInput, { childIds: number[] }> = {
         stack_manifest_path: stackPath,
         environment_id: manifest.environment
           ? environmentId(manifest.environment, stackPath)
-          : stack.environment_id ?? undefined,
+          : null,
         staging_environment_id: manifest.staging_environment === null
           ? null
           : manifest.staging_environment
             ? environmentId(manifest.staging_environment, stackPath)
-            : stack.staging_environment_id ?? undefined,
+            : null,
         apps: specs,
         selected_app_keys: specs.map((spec) => spec.key),
         partial: false,

@@ -101,6 +101,8 @@ export type EnvVarEntry = {
 };
 
 export type DeployRequest = {
+  /** Internal owning stack context for resolving dependency outputs. */
+  stack_id?: number | null;
   storage?: import("./storage-schema.ts").StorageBindings;
   /** Complete manifest reconciliation. Browser/API patches are not supported. */
   apply_mode?: "manifest";
@@ -121,13 +123,11 @@ export type DeployRequest = {
   };
   domain?: string;
   container_port: number;
-  env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
+  env?: DeployManifest["env"];
+  outputs?: DeployManifest["outputs"];
   /** Portable manifest selector. Resolved server-side when environment_id is omitted. */
   environment?: string | null;
   environment_id?: number | null; // Link to an existing environment; null explicitly detaches
-  /** Limit this app to selected keys from its linked environment. null/omit =
-   *  all keys (legacy); [] = platform OCD_INTERNAL_* variables only. */
-  env_projection?: string[] | null;
   volume_id?: string; // Explicit provider volume to adopt; empty = OCD-managed or none
   volume_size?: number; // Desired GB; 0 = explicitly no primary volume
   volume_path?: string; // Container mount path, defaults to /data
@@ -253,17 +253,8 @@ export type StackDeployRequest = {
   partial?: boolean;
   /** Apply desired configuration without changing the released artifact. */
   config_only?: boolean;
-  environment_id?: number; // Reuse an existing environment instead of auto-creating one (only honored when the stack is first created)
-  /** The stack's explicit shared staging environment. Omit to retain the
-   * current selection; null explicitly clears it. */
+  environment_id?: number | null;
   staging_environment_id?: number | null;
-  env_vars?: Array<{ key: string; value: string; secret?: boolean }>; // Already-merged member env (manifest defaults + --set), written into the shared environment
-  /** Staging-only desired values, applied after a staging environment is
-   * created/copied so they replace inherited production values. */
-  staging_env_vars?: Array<{ key: string; value: string; secret?: boolean }>;
-  /** Declared staging contract keys. The server retains certification only for
-   * previously-applied keys still present in this list. */
-  staging_env_keys?: string[];
   /** Stack members resolved to immutable artifacts before runtime deployment. */
   apps: Array<Omit<DeployRequest, "environment_id"> & {
     key: string;
@@ -271,16 +262,6 @@ export type StackDeployRequest = {
     /** Client preflight hint. The server promotes this mode when an
      * authoritative config diff requires a more disruptive action. */
     reconcile_mode?: "control" | "runtime" | "artifact";
-    /** Stack-only projection intent. `declared` is the safe default for a new
-     * member; existing members preserve their stored projection for backwards
-     * compatibility until env/env_all is explicit. */
-    env_projection_mode?: "declared" | "explicit" | "all";
-    /** Child-manifest declarations, used for least-privilege derivation and
-     * public-app exposure warnings. Values never appear here. */
-    declared_env_keys?: string[];
-    /** Generic dependency outputs published as `<MEMBER>_<KEY>` into the
-     * shared environment after this member becomes healthy. */
-    exports?: Record<string, { value: string; secret?: boolean }>;
   }>;
   /** Internal authorization set only by the stack route after browser approval. */
   server_provisioning_approved?: boolean;

@@ -1,3 +1,4 @@
+import { affectedAppsForEnvironmentKeys } from "../runtime-env.ts";
 import db from "./connection.ts";
 import type { ServerRow } from "./servers.ts";
 import type { ReplicaRow } from "./replicas.ts";
@@ -61,9 +62,6 @@ export type AppRow = {
   sleeping_host_port: number | null;
   scale_to_zero_after: number;
   environment_id: number | null;
-  /** NULL = inherit every linked-environment key (legacy). JSON array = only
-   *  those keys; [] = platform-injected OCD_INTERNAL_* variables only. */
-  env_projection: string | null;
   /** 1 when the linked environment changed since the running containers were
    * created. A plain pause/unpause does not clear it; deploy/redeploy/reload do. */
   environment_stale: number;
@@ -334,7 +332,6 @@ type InsertAppFields = {
    *  stored. Empty/omitted = auth disabled. */
   auth_password?: string;
   environment_id?: number;
-  env_projection?: string[] | null;
   public?: boolean;
   health_check?: boolean;
   /** Internal routing protocol. Omitted → derived from health_check (http when
@@ -391,7 +388,7 @@ function insertAppRow(app: InsertAppFields): AppRow {
   const internalProtocol: InternalProtocol = app.internal_protocol ?? "http";
   return db
     .query(
-      "INSERT INTO apps (name, domain, image_ref, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, health_check_expected_statuses, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of, desired_volume_id, desired_volume_size, desired_volume_path, desired_volume_driver, command_json, cap_add_json, post_start_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO apps (name, domain, image_ref, container_port, env_vars, auth_password_hash, environment_id, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, health_check_expected_statuses, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of, desired_volume_id, desired_volume_size, desired_volume_path, desired_volume_driver, command_json, cap_add_json, post_start_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       app.name,
@@ -401,9 +398,6 @@ function insertAppRow(app: InsertAppFields): AppRow {
       app.env_vars,
       hashAuthPassword(app.auth_password || ""),
       app.environment_id ?? null,
-      app.env_projection === undefined || app.env_projection === null
-        ? null
-        : JSON.stringify(app.env_projection),
       (app.public ?? true) ? 1 : 0,
       healthCheck ? 1 : 0,
       app.health_check_mode ?? (healthCheck ? "http" : "container"),
@@ -604,7 +598,9 @@ export function deleteApp(id: number): void {
 }
 
 export function updateAppEnvVars(id: number, envVars: string): void {
-  db.query("UPDATE apps SET env_vars = ? WHERE id = ?").run(envVars, id);
+  db.query(`UPDATE apps SET env_vars = ?, config_revision = config_revision + 1,
+    rollout_requested_revision = CASE WHEN rollout_requested_revision > 0 THEN config_revision + 1 ELSE 0 END
+    WHERE id = ? AND env_vars <> ?`).run(envVars, id, envVars);
 }
 
 export function getAppsByEnvironmentId(environmentId: number): AppRow[] {
@@ -613,11 +609,6 @@ export function getAppsByEnvironmentId(environmentId: number): AppRow[] {
 
 export function updateAppEnvironment(id: number, environmentId: number | null): void {
   db.query("UPDATE apps SET environment_id = ? WHERE id = ?").run(environmentId, id);
-}
-
-export function updateAppEnvProjection(id: number, projection: string[] | null): void {
-  db.query("UPDATE apps SET env_projection = ? WHERE id = ?")
-    .run(projection === null ? null : JSON.stringify(projection), id);
 }
 
 export function markAppsEnvironmentStale(environmentId: number): number {
@@ -629,11 +620,8 @@ export function markAppsEnvironmentStale(environmentId: number): number {
 
 export function markAppsEnvironmentStaleForKeys(environmentId: number, changedKeys: string[]): number {
   if (changedKeys.length === 0) return 0;
-  const changed = new Set(changedKeys);
   let count = 0;
-  for (const app of getAppsByEnvironmentId(environmentId)) {
-    const projection = parseAppEnvProjection(app);
-    if (projection !== null && !projection.some((key) => changed.has(key))) continue;
+  for (const app of getAppsAffectedByEnvironment(environmentId, changedKeys)) {
     const result = db.query(
       "UPDATE apps SET environment_stale = 1 WHERE id = ? AND status NOT IN ('destroying','cleanup_failed')",
     ).run(app.id);
@@ -646,18 +634,13 @@ export function markAppEnvironmentFresh(id: number): void {
   db.query("UPDATE apps SET environment_stale = 0 WHERE id = ?").run(id);
 }
 
-/** NULL means legacy/all. Invalid stored JSON also fails open to all so an
- *  upgrade cannot silently remove variables from a running app. */
-export function parseAppEnvProjection(app: Pick<AppRow, "env_projection">): string[] | null {
-  if (app.env_projection == null) return null;
-  try {
-    const parsed = JSON.parse(app.env_projection);
-    return Array.isArray(parsed) && parsed.every((key) => typeof key === "string")
-      ? parsed
-      : null;
-  } catch {
-    return null;
-  }
+export function getAppsAffectedByEnvironment(environmentId: number, changedKeys?: string[]): AppRow[] {
+  const stacks = db.query("SELECT id, name FROM stacks").all() as {id:number;name:string}[];
+  const keys = changedKeys ?? (() => {
+    const row = db.query("SELECT env_vars FROM environments WHERE id = ?").get(environmentId) as {env_vars:string} | null;
+    return row ? (JSON.parse(row.env_vars).entries ?? []).map((entry: {key:string}) => entry.key) : [];
+  })();
+  return affectedAppsForEnvironmentKeys(getApps(), environmentId, keys, Object.fromEntries(stacks.map((s) => [s.id,s.name])));
 }
 
 export function updateAppContainerPort(id: number, port: number): void {

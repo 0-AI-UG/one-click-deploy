@@ -27,9 +27,9 @@ stack members.
 
 ## Environments and staging
 
-An environment is a named variable/secret bag. A stack member's projection
-limits which keys it receives. Webhook delivery reads committed manifests, so
-projection changes are applied with the image built from that commit.
+An environment stores named values and secrets. Each app's env map explicitly
+selects references or literal values. Webhook delivery reads committed manifests,
+so mapping changes are applied with the image built from that commit.
 
 Staging is an explicit app or stack target with its own environment and domain.
 Promotion copies an exact tested digest; it does not rebuild.
@@ -42,5 +42,7 @@ self-hosted registries. GitHub signed push webhooks are the current automatic
 source trigger; manual deployment is not GitHub-dependent.
 
 DNS is manual and provider-neutral. Hetzner provisioning is optional. Connected
-operator-owned hosts support stateless workloads; managed provider volumes
-require supported managed infrastructure.
+operator-owned hosts support stateless workloads and server-local persistent
+directories. Provider block volumes require supported managed infrastructure.
+Local directories share the host disk and are shown in app/server Storage,
+separately from the provider Volumes inventory.

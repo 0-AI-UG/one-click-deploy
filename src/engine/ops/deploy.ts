@@ -22,7 +22,8 @@ import { syncAppIngress, syncAllTraefik } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import { validateDeployRequest, assertSafeHostPath } from "../../shared/validate.ts";
 import { createMasker } from "../../shared/mask.ts";
-import { processIncomingEnvVars, serializeEnvVars, parseEnvVars, platformEnvVars, projectEnvVars } from "../../shared/env-crypto.ts";
+import { platformEnvVars } from "../../shared/env-crypto.ts";
+import { serializeRuntimeConfig, resolveRuntimeEnv, runtimeAppFromRequest, preflightRuntimeEnv } from "../../shared/runtime-env.ts";
 import { getInfrastructureToken } from "../../shared/secret-store.ts";
 import { defaultInfrastructureProvider } from "../../shared/infrastructure.ts";
 import { provisionServer } from "../provision-server.ts";
@@ -97,11 +98,7 @@ export function appVolumeName(appName: string, opId: number): string {
 async function deploymentMasker(input: DeployInput, userId: string, additionalSecrets: string[] = []) {
   const provider = defaultInfrastructureProvider(db.getSettings());
   const providerToken = provider ? await getInfrastructureToken(provider.id) : "";
-  const envVarValues = input.env_vars
-    ? Array.isArray(input.env_vars)
-      ? input.env_vars.map((e) => e.value)
-      : Object.values(input.env_vars)
-    : [];
+  const envVarValues = Object.values(input.env ?? {}).filter((entry): entry is string => typeof entry === "string");
   const secretValues = [
     providerToken,
     ...envVarValues,
@@ -146,6 +143,7 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
     }
     const validation = validateDeployRequest(req);
     if (!validation.valid) throw new Error(validation.error);
+    await preflightRuntimeEnv(runtimeAppFromRequest(resolveDeployRequestEnvironmentIds(req), req.stack_id ?? null));
 
     // Hard fleet cap: every app permanently owns one internal ingress port.
     if (db.countApps() >= db.INTERNAL_PORT_COUNT) {
@@ -401,17 +399,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       existing.domain || resolveAppDomain(req, domainSettings(server), server.ingressIp).domain;
     const useInternalTls = useDomain.endsWith(".nip.io");
 
-    // Resolve flat env vars from the existing app's environment (idempotent).
-    const flatEnvVars: Record<string, string> = {};
-    if (existing.environment_id) {
-      const envRow = db.getEnvironment(existing.environment_id);
-      if (envRow) {
-        const { resolveAppEnvVars } = await import("../../shared/env-crypto.ts");
-        const resolved = await resolveAppEnvVars(existing);
-        for (const key of Object.keys(platformEnvVars(existing))) delete resolved[key];
-        Object.assign(flatEnvVars, resolved);
-      }
-    }
+    const flatEnvVars = await resolveRuntimeEnv(existing);
     ctx.log(`adopting existing app row id=${existing.id} (already inserted in prior attempt)`);
     return {
       appId: existing.id,
@@ -437,54 +425,10 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     const { domain: useDomain } = resolveAppDomain(req, domainSettings(server), server.ingressIp);
     const useInternalTls = useDomain.endsWith(".nip.io");
 
-    // Resolve environment + flat env vars (must be reproducible; idempotent
-    // env creation uses unique-name retry). A deploy's env_vars are the caller's
-    // already-merged manifest defaults + --set overrides (existing-wins keys are
-    // dropped client-side). We LAYER them onto the target environment — linked
-    // or freshly created — overwriting by key.
-    let environmentId: number | null = req.environment_id ?? null;
-    const flatEnvVars: Record<string, string> = {};
-
-    // A non-production deploy target (staging/dev) links to the environment the
-    // caller selected — passed as req.environment_id, resolved like any app's
-    // env below. There is no live inheritance from production: the sibling gets
-    // exactly the environment it points at (typically a user-made copy of prod).
-    // Back-compat: legacy clients sent env_label/sibling_of for what are now
-    // target/target_of — honor them (identical semantics) when the new fields
-    // are absent.
-    const targetTag = req.target ?? req.env_label;
-    const targetOf = req.target_of ?? req.sibling_of;
-
-    const incoming =
-      req.env_vars &&
-      (Array.isArray(req.env_vars) ? req.env_vars.length > 0 : Object.keys(req.env_vars).length > 0)
-        ? await processIncomingEnvVars(req.env_vars)
-        : null;
-
-    const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
-    if (environmentId) {
-      const envRow = db.getEnvironment(environmentId);
-      if (envRow) {
-        // Overlay incoming vars on top of the linked env and persist (overwrite
-        // by key). Idempotent: a retry re-overlays the same keys.
-        if (incoming && incoming.entries.length > 0) {
-          const overlaid = new Set(incoming.entries.map((e) => e.key));
-          const base = parseEnvVars(envRow.env_vars).entries.filter((e) => !overlaid.has(e.key));
-          db.updateEnvironment(envRow.id, envRow.name, serializeEnvVars([...base, ...incoming.entries]));
-        }
-        Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(db.getEnvironment(environmentId)!.env_vars));
-      }
-    } else if (incoming && incoming.entries.length > 0) {
-      let envName = req.app_name;
-      let suffix = 1;
-      while (db.getEnvironments().find((e) => e.name === envName)) {
-        envName = `${req.app_name}-${suffix++}`;
-      }
-      const envRow = db.insertEnvironment(envName, serializeEnvVars(incoming.entries));
-      environmentId = envRow.id;
-      Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(envRow.env_vars));
-    }
-    const projectedFlatEnvVars = projectEnvVars(flatEnvVars, req.env_projection);
+    const environmentId = req.environment_id ?? null;
+    const targetTag = req.target;
+    const targetOf = req.target_of;
+    const flatEnvVars = await resolveRuntimeEnv(runtimeAppFromRequest(req, req.stack_id ?? null));
 
     const extraVolumes = (req.extra_volumes || []).map(
       (v) => `${v.host_path}:${v.container_path}`,
@@ -503,10 +447,9 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           domain: useDomain,
           image_ref: req.image_ref!,
           container_port: req.container_port,
-          env_vars: serializeEnvVars([]),
+          env_vars: serializeRuntimeConfig(req),
           auth_password: req.auth_password,
           environment_id: environmentId ?? undefined,
-          env_projection: req.env_projection,
           public: req.public,
           health_check: req.health_check,
           health_check_mode: req.health_check_mode,
@@ -563,6 +506,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       if (typeof req.cpu_limit === "number" && req.cpu_limit > 0) {
         db.updateAppCpu(result.app.id, req.cpu_limit);
       }
+      if (req.stack_id !== undefined) db.setAppStack(result.app.id, req.stack_id);
       return result;
     })();
 
@@ -583,7 +527,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       domain: useDomain,
       useInternalTls,
       environmentId,
-      flatEnvVars: projectedFlatEnvVars,
+      flatEnvVars,
     };
   },
   async compensate(ctx, out) {

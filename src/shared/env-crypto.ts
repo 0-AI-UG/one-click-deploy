@@ -23,7 +23,6 @@ export function suspiciousPlaintextKeys(
   return [...new Set(items.filter((item) => !item.secret && isSuspiciousSecretKey(item.key)).map((item) => item.key))];
 }
 
-export class InjectedEnvVarError extends Error {}
 
 export type EnvVarEntry = {
   key: string;
@@ -32,7 +31,6 @@ export type EnvVarEntry = {
   iv?: string;
   secret: boolean;
   updated_at: string;
-  injected_by?: string;
 };
 
 export type EnvVarsV2 = {
@@ -87,15 +85,6 @@ export async function resolveEnvVarsForDeploy(
   return result;
 }
 
-export function projectEnvVars(
-  vars: Record<string, string>,
-  projection: string[] | null | undefined,
-): Record<string, string> {
-  if (projection == null) return vars;
-  const allowed = new Set(projection);
-  return Object.fromEntries(Object.entries(vars).filter(([key]) => allowed.has(key)));
-}
-
 /** Mask secret values for API responses. Strips encrypted_value/iv. */
 export function maskEnvVarsForResponse(parsed: EnvVarsV2): EnvVarEntry[] {
   return parsed.entries.map((entry) => ({
@@ -103,7 +92,6 @@ export function maskEnvVarsForResponse(parsed: EnvVarsV2): EnvVarEntry[] {
     value: entry.secret ? SECRET_MASK : entry.value,
     secret: entry.secret,
     updated_at: entry.updated_at,
-    ...(entry.injected_by ? { injected_by: entry.injected_by } : {}),
   }));
 }
 
@@ -117,22 +105,9 @@ export async function mergeEnvVarUpdate(
 ): Promise<EnvVarsV2> {
   const now = new Date().toISOString();
   const existingByKey = new Map(existing.entries.map((e) => [e.key, e]));
-  for (const entry of existing.entries) {
-    if (entry.injected_by && incoming.filter((item) => item.key === entry.key).length !== 1) {
-      throw new InjectedEnvVarError(`${entry.key} is injected by ${entry.injected_by} and cannot be removed or duplicated`);
-    }
-  }
-
   const entries: EnvVarEntry[] = [];
   for (const item of incoming) {
     const prev = existingByKey.get(item.key);
-    if (prev?.injected_by) {
-      if (item.secret !== prev.secret || item.value !== (prev.secret ? SECRET_MASK : prev.value)) {
-        throw new InjectedEnvVarError(`${item.key} is injected by ${prev.injected_by} and is read-only`);
-      }
-      entries.push(prev);
-      continue;
-    }
     const secret = item.secret || isSuspiciousSecretKey(item.key);
 
     if (secret) {
@@ -234,11 +209,8 @@ export function platformEnvVars(
  *  environment the user selected explicitly and resolve only that env. User vars win over the
  *  sibling's own platform vars (its OCD_INTERNAL_* point at itself). */
 export async function resolveAppEnvVars(app: AppRow): Promise<Record<string, string>> {
-  const db = await import("./db.ts");
-  const ownRow = app.environment_id ? db.getEnvironment(app.environment_id) : null;
-  let ownVars = await resolveEnvVarsForDeploy(ownRow?.env_vars);
-  const projection = db.parseAppEnvProjection(app);
-  ownVars = projectEnvVars(ownVars, projection);
+  const { resolveRuntimeEnv } = await import("./runtime-env.ts");
+  const ownVars = await resolveRuntimeEnv(app);
   const platform = platformEnvVars(app);
   const { appStorageEnv } = await import("./object-storage.ts");
   return {

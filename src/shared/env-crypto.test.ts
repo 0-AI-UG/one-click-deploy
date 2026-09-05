@@ -1,3 +1,4 @@
+import { serializeRuntimeConfig, type RuntimeEnv } from "./runtime-env.ts";
 import { useTempDataDir, randomSuffix } from "./test-helpers.ts";
 useTempDataDir();
 
@@ -76,7 +77,7 @@ describe("platformEnvVars", () => {
 describe("resolveAppEnvVars platform injection", () => {
   function makeApp(opts: {
     environment_id?: number;
-    env_projection?: string[] | null;
+    env?: RuntimeEnv;
     health_check?: boolean;
     internal_protocol?: "http" | "tcp";
   } = {}) {
@@ -86,9 +87,8 @@ describe("resolveAppEnvVars platform injection", () => {
       domain: `${name}.example.com`,
       image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
-      env_vars: "{}",
+      env_vars: serializeRuntimeConfig({env:opts.env}),
       environment_id: opts.environment_id,
-      env_projection: opts.env_projection,
       health_check: opts.health_check,
       internal_protocol: opts.internal_protocol,
     });
@@ -126,7 +126,7 @@ describe("resolveAppEnvVars platform injection", () => {
         { key: "OTHER", value: "abc", secret: false, updated_at: now },
       ]),
     );
-    const app = makeApp({ environment_id: env.id });
+    const app = makeApp({ environment_id: env.id, env:{ OCD_INTERNAL_URL:{from:"environment.OCD_INTERNAL_URL"}, OTHER:{from:"environment.OTHER"} } });
     const vars = await resolveAppEnvVars(app);
     expect(vars.OCD_INTERNAL_URL).toBe("http://hand-set.example:8080");
     expect(vars.OTHER).toBe("abc");
@@ -141,7 +141,7 @@ describe("resolveAppEnvVars platform injection", () => {
     expect(vars.OCD_INTERNAL_URL).toBe(`tcp://${app.name}.ocd.internal:${app.container_port}`);
   });
 
-  test("projects a shared environment per app while retaining platform variables", async () => {
+  test("maps shared environment keys per app while retaining platform variables", async () => {
     const now = new Date().toISOString();
     const env = db.insertEnvironment(
       `envtest-projected-${randomSuffix()}`,
@@ -150,7 +150,7 @@ describe("resolveAppEnvVars platform injection", () => {
         { key: "WORKER_ONLY", value: "no", secret: false, updated_at: now },
       ]),
     );
-    const app = makeApp({ environment_id: env.id, env_projection: ["API_ONLY"] });
+    const app = makeApp({ environment_id: env.id, env: {API_ONLY:{from:"environment.API_ONLY"}} });
     const vars = await resolveAppEnvVars(app);
 
     expect(vars.API_ONLY).toBe("yes");
@@ -158,7 +158,7 @@ describe("resolveAppEnvVars platform injection", () => {
     expect(vars.OCD_INTERNAL_HOST).toBe(`${app.name}.ocd.internal`);
   });
 
-  test("an empty projection receives platform variables only", async () => {
+  test("an empty env map receives platform variables only", async () => {
     const now = new Date().toISOString();
     const env = db.insertEnvironment(
       `envtest-empty-projection-${randomSuffix()}`,
@@ -166,38 +166,10 @@ describe("resolveAppEnvVars platform injection", () => {
         { key: "SHARED", value: "hidden", secret: false, updated_at: now },
       ]),
     );
-    const app = makeApp({ environment_id: env.id, env_projection: [] });
+    const app = makeApp({ environment_id: env.id, env: {} });
     const vars = await resolveAppEnvVars(app);
 
     expect(vars.SHARED).toBeUndefined();
     expect(vars.OCD_INTERNAL_URL).toBe(`http://${app.name}.ocd.internal`);
-  });
-});
-
-
-describe("injected environment ownership", () => {
-  test("allows unchanged managed secrets while rejecting edits, deletion and duplicate keys", async () => {
-    const stored = await processIncomingEnvVars([{ key: "DB_DSN", value: "private", secret: true }]);
-    stored.entries[0].injected_by = "database";
-    const response = maskEnvVarsForResponse(stored)[0];
-    expect(response.injected_by).toBe("database");
-    expect(response.value).toBe("••••••••");
-    expect(response.encrypted_value).toBeUndefined();
-    expect(response.iv).toBeUndefined();
-    const row = { key: "DB_DSN", value: "••••••••", secret: true };
-    expect((await mergeEnvVarUpdate(stored, [row])).entries).toEqual(stored.entries);
-    for (const input of [[], [row, row], [{ ...row, value: "changed" }], [{ ...row, secret: false }]]) {
-      await expect(mergeEnvVarUpdate(stored, input)).rejects.toThrow("injected");
-    }
-  });
-
-  test("all environment writers protect injected entries; the injector can refresh them", () => {
-    const entry = { key: "API_URL", value: "http://api.ocd.internal", secret: false, updated_at: "now", injected_by: "api" };
-    const env = db.insertEnvironment(`managed-${randomSuffix()}`, serializeEnvVars([entry]));
-    db.updateEnvironment(env.id, env.name, serializeEnvVars([entry, { key: "MODE", value: "debug", secret: false, updated_at: "now" }]));
-    expect(() => db.updateEnvironment(env.id, env.name, serializeEnvVars([]))).toThrow("read-only");
-    expect(() => db.updateEnvironment(env.id, env.name, serializeEnvVars([{ ...entry, value: "override" }]))).toThrow("read-only");
-    db.updateEnvironment(env.id, env.name, serializeEnvVars([{ ...entry, value: "http://new.ocd.internal" }]), { injection: true });
-    expect(parseEnvVars(db.getEnvironment(env.id)!.env_vars).entries[0].value).toBe("http://new.ocd.internal");
   });
 });

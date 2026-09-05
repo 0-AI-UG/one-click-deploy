@@ -10,14 +10,18 @@
     },
     "api": {
       "manifest": "services/api/.ocd-deploy.json",
-      "needs": ["database", "redis"],
-      "env": ["DATABASE_URL", "REDIS_URL", "JWT_SECRET", "LOG_LEVEL"]
+      "needs": [
+        "database",
+        "redis"
+      ]
     },
     "web": {
       "manifest": "services/web/.ocd-deploy.json",
-      "needs": ["api"],
-      "env": ["API_URL", "NODE_ENV"],
+      "needs": [
+        "api"
+      ],
       "public": true
     }
-  }
+  },
+  "environment": "production"
 }

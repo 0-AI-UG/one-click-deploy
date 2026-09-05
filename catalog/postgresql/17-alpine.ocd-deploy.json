@@ -4,28 +4,58 @@
   "description": "PostgreSQL 17 on Alpine as an image-backed OCD app.",
   "image": "postgres:17-alpine",
   "container_port": 5432,
-  "env": [
-    { "key": "DATABASE_USER", "generate": "username" },
-    { "key": "DATABASE_PASSWORD", "generate": "password", "secret": true },
-    { "key": "DATABASE_NAME", "default": "app" },
-    { "key": "PGDATA", "default": "/var/lib/postgresql/data/pgdata" }
-  ],
-  "exports": {
-    "URL": { "value": "postgresql://{env.DATABASE_USER}:{env.DATABASE_PASSWORD}@{app.host}:{app.port}/{env.DATABASE_NAME}", "secret": true },
-    "HOST": { "value": "{app.host}" },
-    "PORT": { "value": "{app.port}" },
-    "USER": { "value": "{env.DATABASE_USER}" },
-    "PASSWORD": { "value": "{env.DATABASE_PASSWORD}", "secret": true },
-    "NAME": { "value": "{env.DATABASE_NAME}" }
+  "env": {
+    "DATABASE_USER": {
+      "from": "environment.DATABASE_USER"
+    },
+    "DATABASE_PASSWORD": {
+      "from": "environment.DATABASE_PASSWORD"
+    },
+    "DATABASE_NAME": "app",
+    "PGDATA": "/var/lib/postgresql/data/pgdata"
   },
   "command": [
     "sh",
     "-ec",
     "export POSTGRES_USER=\"$DATABASE_USER\" POSTGRES_PASSWORD=\"$DATABASE_PASSWORD\" POSTGRES_DB=\"$DATABASE_NAME\" PGUSER=\"$DATABASE_USER\" PGDATABASE=\"$DATABASE_NAME\"; exec docker-entrypoint.sh postgres"
   ],
-  "cap_add": ["CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER"],
+  "cap_add": [
+    "CHOWN",
+    "SETUID",
+    "SETGID",
+    "DAC_OVERRIDE",
+    "FOWNER"
+  ],
   "internal_protocol": "tcp",
   "public": false,
-  "health_check": { "mode": "exec", "command": "pg_isready" },
-  "volume": { "size": 10, "path": "/var/lib/postgresql/data" }
+  "health_check": {
+    "mode": "exec",
+    "command": "pg_isready"
+  },
+  "volume": {
+    "size": 10,
+    "path": "/var/lib/postgresql/data"
+  },
+  "outputs": {
+    "URL": {
+      "template": "postgresql://{env.DATABASE_USER}:{env.DATABASE_PASSWORD}@{app.host}:{app.port}/{env.DATABASE_NAME}",
+      "secret": true
+    },
+    "HOST": {
+      "template": "{app.host}"
+    },
+    "PORT": {
+      "template": "{app.port}"
+    },
+    "USER": {
+      "template": "{env.DATABASE_USER}"
+    },
+    "PASSWORD": {
+      "template": "{env.DATABASE_PASSWORD}",
+      "secret": true
+    },
+    "NAME": {
+      "template": "{env.DATABASE_NAME}"
+    }
+  }
 }

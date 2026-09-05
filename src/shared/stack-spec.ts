@@ -26,8 +26,6 @@ export function repoDirOf(path: string): string {
 
 /**
  * Map an app's DeployManifest (+ stack-entry overrides) onto a StackAppSpec.
- * env_vars are NOT set here — the caller attaches the values collected from
- * manifest defaults, CLI flags, linked environments, and secure prompts.
  *
  * `repo` and `manifestDir` are retained in the helper signature until callers
  * are simplified; source location never enters the deployment spec.
@@ -48,32 +46,20 @@ export function buildStackAppSpec(
     key,
     app_name: key, // server derives <stack>-<key>; sent only to satisfy the type
     container_port: manifest.container_port ?? 3000,
-    declared_env_keys: [...new Set((manifest.env ?? []).map((entry) => entry.key))],
+    env: manifest.env ?? {},
+    outputs: manifest.outputs ?? {},
   };
   if (manifest.build) spec.build = manifest.build;
   if (manifest.image) spec.image_ref = manifest.image;
   spec.delivery_source = manifest.build ? "build" : "image";
   if (manifest.storage) spec.storage = manifest.storage;
-  if (manifest.exports) spec.exports = manifest.exports;
   if (manifest.environment !== undefined) spec.environment = manifest.environment;
 
-  if (entry.needs) spec.needs = entry.needs;
-  if (entry.env !== undefined) {
-    spec.env_projection = entry.env;
-    spec.env_projection_mode = "explicit";
-  } else if (entry.env_all) {
-    spec.env_projection = null;
-    spec.env_projection_mode = "all";
-  } else if (manifest.env_projection !== undefined) {
-    spec.env_projection = manifest.env_projection;
-    spec.env_projection_mode = "explicit";
-  } else {
-    // A new stack member receives only variables it declared plus dependency
-    // injection keys resolved by deploy_stack. Existing stored members preserve
-    // their current projection when this default intent is applied.
-    spec.env_projection = spec.declared_env_keys;
-    spec.env_projection_mode = "declared";
-  }
+  spec.needs = [...new Set([
+    ...(entry.needs ?? []),
+    ...Object.values(manifest.env ?? {}).flatMap((value) =>
+      typeof value === "object" && value.from.startsWith("apps.") ? [value.from.split(".")[1]] : []),
+  ])];
   const domain = entry.domain ?? manifest.domain;
   if (domain) spec.domain = domain;
 
@@ -134,4 +120,35 @@ export function buildStackAppSpec(
   if (manifest.extra_volumes?.length) spec.extra_volumes = manifest.extra_volumes;
 
   return spec;
+}
+
+/** Validate dependency references before any stack changes are submitted. */
+export function validateStackReferences(apps: StackAppSpec[]): void {
+  const byKey = new Map(apps.map((app) => [app.key, app]));
+  for (const app of apps) {
+    for (const value of Object.values(app.env ?? {})) {
+      if (typeof value === "string" || !value.from.startsWith("apps.")) continue;
+      const [, member, , output] = value.from.split(".");
+      if (!byKey.get(member)?.outputs?.[output]) {
+        throw new Error(`${app.key}: missing output ${value.from}`);
+      }
+    }
+    for (const key of app.needs ?? []) {
+      if (!byKey.has(key)) throw new Error(`${app.key}: unknown dependency ${key}`);
+    }
+  }
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+  function visit(key: string): void {
+    if (visiting.has(key)) throw new Error(`Stack dependency cycle involving ${key}`);
+    if (visited.has(key)) return;
+    visiting.add(key);
+    const app = byKey.get(key)!;
+    const references = Object.values(app.env ?? {}).flatMap((value) =>
+      typeof value === "object" && value.from.startsWith("apps.") ? [value.from.split(".")[1]] : []);
+    for (const dependency of new Set([...(app.needs ?? []), ...references])) visit(dependency);
+    visiting.delete(key);
+    visited.add(key);
+  }
+  for (const key of byKey.keys()) visit(key);
 }

@@ -52,6 +52,9 @@ export async function handleDeployStack(request: Request): Promise<Response> {
   try {
     const payload = await requireCliPermission(request, "stacks.deploy");
     const req: StackDeployRequest = await request.json();
+    for (const field of ["env_vars", "staging_env_vars", "staging_env_keys"]) {
+      if (field in req) return Response.json({ ok: false, error: `${field} is not supported; configure environments separately` }, { status: 400, headers: corsHeaders });
+    }
     if (req.apps?.some(app => app.storage && Object.keys(app.storage).length)) await requireAdmin(request);
     if (!req?.name || typeof req.name !== "string") {
       return Response.json({ ok: false, error: "name is required" }, { status: 400, headers: corsHeaders });

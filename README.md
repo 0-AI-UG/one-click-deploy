@@ -60,3 +60,20 @@ bun run build:cli
 ```
 
 [Documentation](docs/) · [Contributing](CONTRIBUTING.md) · [MIT License](LICENSE)
+
+Runtime variables are explicit in each app manifest:
+
+```json
+{
+  "environment": "production",
+  "env": {
+    "NODE_ENV": "production",
+    "DATABASE_URL": { "from": "environment.DATABASE_URL" }
+  }
+}
+```
+
+Create stored values with `ocd envs set` or `ocd envs generate` before deploying.
+Deployment resolves references without modifying the environment. Stack members
+can reference `apps.database.outputs.URL`; these references infer startup order.
+Only mapped user variables are injected, alongside platform and storage variables.

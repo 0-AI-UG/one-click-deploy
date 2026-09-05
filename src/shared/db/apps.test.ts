@@ -25,7 +25,7 @@ function makeApp(
     domain: `${name}.example.com`,
     image_ref: IMAGE_REF,
     container_port: 3000,
-    env_vars: "{}",
+    env_vars: '{"env":{},"outputs":{}}',
     ...extra,
   });
 }
@@ -37,7 +37,7 @@ describe("immutable image contract", () => {
       domain: "",
       image_ref: "ghcr.io/acme/test:latest",
       container_port: 3000,
-      env_vars: "{}",
+      env_vars: '{"env":{},"outputs":{}}',
     })).toThrow(/immutable OCI reference/);
 
     const app = makeApp();
@@ -91,7 +91,7 @@ describe("internal port allocation", () => {
         domain: `${name}.example.com`,
         image_ref: IMAGE_REF,
         container_port: 3000,
-        env_vars: "{}",
+        env_vars: '{"env":{},"outputs":{}}',
       },
       server.id,
     );
@@ -132,14 +132,14 @@ describe("internal port allocation", () => {
 });
 
 describe("environment staleness", () => {
-  test("marks only apps whose environment projection consumes a changed key", () => {
+  test("marks only apps whose env map consumes a changed key", () => {
     const env = db.insertEnvironment(`env-${randomSuffix()}`, "");
     const all = db.insertApp({
       name: `all-${randomSuffix()}`,
       domain: "",
       image_ref: IMAGE_REF,
       container_port: 3000,
-      env_vars: "{}",
+      env_vars: '{"env":{"A":{"from":"environment.A"}},"outputs":{}}',
       environment_id: env.id,
     });
     const consumesA = db.insertApp({
@@ -147,18 +147,18 @@ describe("environment staleness", () => {
       domain: "",
       image_ref: IMAGE_REF,
       container_port: 3000,
-      env_vars: "{}",
+      env_vars: '{"env":{"A":{"from":"environment.A"}},"outputs":{}}',
       environment_id: env.id,
-      env_projection: ["A"],
+
     });
     const onlyB = db.insertApp({
       name: `b-${randomSuffix()}`,
       domain: "",
       image_ref: IMAGE_REF,
       container_port: 3000,
-      env_vars: "{}",
+      env_vars: '{"env":{"B":{"from":"environment.B"}},"outputs":{}}',
       environment_id: env.id,
-      env_projection: ["B"],
+
     });
 
     expect(db.markAppsEnvironmentStaleForKeys(env.id, ["A"])).toBe(2);
@@ -338,7 +338,7 @@ describe("deploy targets: setAppTarget / getAppTargets", () => {
       domain: "",
       image_ref: IMAGE_REF,
       container_port: 3000,
-      env_vars: "{}",
+      env_vars: '{"env":{},"outputs":{}}',
       target: "staging",
       target_of: parent.id,
     });

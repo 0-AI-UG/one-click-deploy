@@ -27,9 +27,9 @@ stack members.
 
 ## Environments and staging
 
-An environment is a named variable/secret bag. A stack member's projection
-limits which keys it receives. Webhook delivery reads committed manifests, so
-projection changes are applied with the image built from that commit.
+An environment stores named values and secrets. Each app's env map explicitly
+selects references or literal values. Webhook delivery reads committed manifests,
+so mapping changes are applied with the image built from that commit.
 
 Staging is an explicit app or stack target with its own environment and domain.
 Promotion copies an exact tested digest; it does not rebuild.

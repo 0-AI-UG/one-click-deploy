@@ -173,12 +173,7 @@ async function applyExistingAppConfig(
   }
 
   const owningStack = app.stack_id == null ? null : db.getStack(app.stack_id);
-  const plan = classifyConfigOnlyChanges(changes, {
-    // Manifest env entries may update encrypted values that are deliberately
-    // absent from the public config diff. Recreate conservatively so the
-    // reported runtime state is truthful.
-    environmentChanged: Array.isArray(spec.env_vars) && spec.env_vars.length > 0,
-  });
+  const plan = classifyConfigOnlyChanges(changes);
   // Preserve the established config-only API contract: desired state is
   // durably applied before the response. The child operation below performs
   // only the required runtime/volume reconciliation.

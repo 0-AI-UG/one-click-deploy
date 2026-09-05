@@ -17,16 +17,12 @@ Stack `blog`, app key `api` becomes `blog-api`; app key `database` becomes
 | `description` | Optional human metadata. |
 | `environment` | Existing shared production environment name. |
 | `staging_environment` | Optional existing shared staging environment name; `null` clears the link. It does not create an environment or app. |
-| `staging_env` | Values applied to the selected staging environment. It requires that environment and does not trigger a release. |
 | `apps` | Required non-empty app map. |
 
 App entries support:
 
 - `apps.<key>.manifest`: required child manifest path relative to the stack;
 - `apps.<key>.needs`: app keys that must become healthy first;
-- `apps.<key>.env`: explicit shared-environment key projection;
-- `apps.<key>.env_all`: explicitly expose every shared key; mutually exclusive
-  with `env`;
 - `apps.<key>.domain`: override the child domain;
 - `apps.<key>.public`: override child public routing.
 
@@ -34,16 +30,22 @@ Unknown nested fields and unknown `needs` targets are rejected.
 
 ## Dependency and environment behavior
 
-`needs` must form an acyclic graph. Dependencies become healthy before their
-consumers; independent members can proceed concurrently. Dependency variables
-use the stack member key: `api` publishes `API_URL`; `database` publishes
-`DATABASE_URL` when the database app declares an `exports.URL` template.
+Each child's `env` map defines its complete user runtime environment. The
+stack selects an existing environment once; child manifests inherit it unless
+they explicitly select another environment or detach with `null`. Omitting
+the stack environment clears its selection. Deployment never creates or
+changes stored values.
 
-All child `env[]` declarations merge into the shared environment. Explicit
-sets win, existing values beat defaults, and conflicting defaults fail unless
-resolved. New members receive only child-declared and dependency-generated
-keys by default. Use `env_all` only when the member genuinely needs the full
-bag.
+A consumer can declare `"DATABASE_URL": {"from": "apps.database.outputs.URL"}`.
+The database declares `"outputs": {"URL": {"template":
+"postgresql://{env.DATABASE_USER}:{env.DATABASE_PASSWORD}@{app.host}:{app.port}/{env.DATABASE_NAME}",
+"secret": true}}`. Templates read the producer's resolved runtime variables.
+The output is delivered directly to the consumer; it is not a shared stored key.
+
+References infer dependency ordering. Keep `needs` for dependencies that have
+no variable reference. Missing members, missing output names, and cycles fail
+preflight. Dependencies become healthy before consumers; independent members
+can proceed concurrently. Secret metadata propagates through derived outputs.
 
 Treat staging as a separate delivery target. `ocd deploy stack` reconciles the
 declared production app members; it does not synthesize staging siblings.
@@ -79,19 +81,16 @@ an intentional artifact-only rollout after configuration is synchronized.
   "environment": "production",
   "apps": {
     "database": {
-      "manifest": "apps/database/.ocd-deploy.json",
-      "env": ["DATABASE_PASSWORD"]
+      "manifest": "apps/database/.ocd-deploy.json"
     },
     "api": {
       "manifest": "services/api/.ocd-deploy.json",
       "needs": ["database"],
-      "env": ["DATABASE_URL", "JWT_SECRET"],
       "public": false
     },
     "web": {
       "manifest": "services/web/.ocd-deploy.json",
-      "needs": ["api"],
-      "env": ["API_URL", "NODE_ENV"]
+      "needs": ["api"]
     }
   }
 }

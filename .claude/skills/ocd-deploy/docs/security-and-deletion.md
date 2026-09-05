@@ -110,7 +110,7 @@ provider volume ID before the server marks the confirmation approved.
 |---|---|---|---|---|
 | Delete app | Web UI always | retained | detached/retained | containers and ingress removed; DNS cleanup shown as manual |
 | Delete managed server | Web UI always | retained | workload volumes retained | cascades through assigned workloads, then deletes the provider VPS |
-| Disconnect external server | Web UI always | retained | unsupported | cascades through assigned stateless workloads; never deletes the VPS |
+| Disconnect external server | Web UI always | retained | blocked while local volumes are tracked | cleans up workloads only after storage blockers are resolved; never deletes the VPS |
 | Delete stack | Web UI always | production and staging retained | member volumes detached/retained | all recorded apps destroyed |
 | Delete environment | Web UI always | explicitly deleted only if unused | n/a | fails while apps link it |
 | Cancel operation | Web UI always once compensation is possible | compensation depends on provisional ownership | compensation may detach created volume | runs operation rollback |
@@ -198,3 +198,13 @@ provider error. Inspect it with `ocd volumes audit`.
   secret values do not appear in process arguments or shell history.
 - Do not send tokens, passwords, connection strings, or personal identifiers
   into issue comments, dashboards, or agent-visible output.
+
+## CLI confirmation behavior
+
+Use the normal `ocd delete` / `ocd volumes delete` workflow to open the browser
+and wait for the resource-bound approval. Raw API calls do not launch a browser.
+Existing user authorization establishes task scope, but the server still
+requires its browser confirmation before consuming destructive requests.
+Show exact reviewed targets before opening approvals; for volume deletion the
+user types the exact volume ID. Do not substitute direct provider deletion for
+OCD's confirmation and audit workflow.

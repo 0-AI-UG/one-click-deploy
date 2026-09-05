@@ -13,25 +13,35 @@
   "container_port": 5432,
   "public": false,
   "internal_protocol": "tcp",
-  "env": [
-    {
-      "key": "POSTGRES_USER",
-      "default": "postgres"
+  "env": {
+    "POSTGRES_USER": {
+      "from": "environment.POSTGRES_USER"
     },
-    {
-      "key": "POSTGRES_PASSWORD",
-      "generate": "password",
-      "secret": true
+    "POSTGRES_PASSWORD": {
+      "from": "environment.POSTGRES_PASSWORD"
     },
-    {
-      "key": "POSTGRES_DB",
-      "default": "postgres"
+    "POSTGRES_DB": {
+      "from": "environment.POSTGRES_DB"
     },
-    {
-      "key": "PGDATA",
-      "default": "/var/lib/postgresql/data/pgdata"
+    "PGDATA": {
+      "from": "environment.PGDATA"
+    },
+    "FOODY_ROLE_PASSWORD": {
+      "from": "environment.FOODY_ROLE_PASSWORD"
+    },
+    "BACKUP_ROLE_PASSWORD": {
+      "from": "environment.BACKUP_ROLE_PASSWORD"
+    },
+    "SKYLINE_ROLE_PASSWORD": {
+      "from": "environment.SKYLINE_ROLE_PASSWORD"
+    },
+    "DOCS_ROLE_PASSWORD": {
+      "from": "environment.DOCS_ROLE_PASSWORD"
+    },
+    "SIGHT_ROLE_PASSWORD": {
+      "from": "environment.SIGHT_ROLE_PASSWORD"
     }
-  ],
+  },
   "volume": {
     "size": 10,
     "path": "/var/lib/postgresql/data",
@@ -43,14 +53,14 @@
     "mode": "exec",
     "command": "pg_isready -U postgres -d postgres"
   },
-  "exports": {
+  "suggested_app_name": "ocd-shared-postgres",
+  "environment": "shared-data",
+  "outputs": {
     "HOST": {
-      "value": "{app.host}"
+      "template": "{app.host}"
     },
     "PORT": {
-      "value": "{app.port}"
+      "template": "{app.port}"
     }
-  },
-  "suggested_app_name": "ocd-shared-postgres",
-  "environment": "shared-data"
+  }
 }

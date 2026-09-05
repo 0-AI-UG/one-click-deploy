@@ -16,7 +16,7 @@ ocd release api \
 `ocd release` requires an existing app and an exact digest. It changes only the
 running image while preserving stored configuration. It does not read
 `.ocd-deploy.json` or `ocd-stack.json`, so do not use it when environment
-projections, ingress, health, storage, resources, or stack relationships may
+mappings, ingress, health, storage, resources, or stack relationships may
 have changed. It remains useful for importing a trusted externally produced
 artifact or retrying an already synchronized configuration.
 

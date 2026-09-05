@@ -2,7 +2,7 @@ import { getAppStorage, resolveStorageBindings, saveAppStorage, prepareStorageBi
 import * as db from "./db.ts";
 import type { AppRow } from "./db/apps.ts";
 import type { DeployRequest } from "./rpc.ts";
-import { parseEnvVars, processIncomingEnvVars, serializeEnvVars } from "./env-crypto.ts";
+import { parseRuntimeConfig, serializeRuntimeConfig, preflightRuntimeEnv, runtimeAppFromRequest } from "./runtime-env.ts";
 import { resolveDurability } from "./durability.ts";
 import { validateDeployRequest } from "./validate.ts";
 
@@ -17,7 +17,7 @@ export type AppReconcileMode = "control" | "runtime" | "artifact";
 const ARTIFACT_CONFIG_FIELDS = new Set(["image_ref"]);
 
 const RUNTIME_CONFIG_FIELDS = new Set([
-  "storage", "container_port", "environment_id", "env_projection", "memory_mb", "cpu_limit",
+  "storage", "container_port", "environment_id", "env", "outputs", "memory_mb", "cpu_limit",
   "health_check", "health_check_mode", "health_check_command", "health_check_file",
   "health_check_max_age_seconds", "health_check_expected_statuses", "internal_protocol",
   "extra_volumes", "desired_volume_id", "desired_volume_size", "desired_volume_path", "desired_volume_driver",
@@ -132,8 +132,7 @@ export function normalizeAppScaling(req: DeployRequest): AppScalingSpec {
 
 /** Normalize a complete manifest application for an existing app.
  *
- * Runtime-assigned identity (the generated domain), explicit environment
- * linkage omitted by the manifest, stack ownership, and attached-volume state
+ * Runtime-assigned identity (the generated domain), stack ownership, and attached-volume state
  * are retained. Every manifest-owned scalar uses its documented default.
  */
 export function mergeDeployRequestWithExistingApp(
@@ -154,9 +153,9 @@ export function mergeDeployRequestWithExistingApp(
     domain: publicApp ? supplied.domain ?? app.domain : "",
     image_ref: supplied.image_ref ?? "",
     container_port: supplied.container_port,
-    env_vars: supplied.env_vars,
+    env: supplied.env ?? {},
+    outputs: supplied.outputs ?? {},
     storage: resolveStorageBindings(supplied.storage, getAppStorage(app.id)),
-    env_projection: supplied.env_projection ?? null,
     public: publicApp,
     memory_mb: supplied.memory_mb ?? 0,
     cpu_limit: supplied.cpu_limit ?? 0,
@@ -171,9 +170,7 @@ export function mergeDeployRequestWithExistingApp(
     health_check_max_age_seconds: supplied.health_check_max_age_seconds ?? 0,
     health_check_expected_statuses: supplied.health_check_expected_statuses ?? [200],
     environment: supplied.environment,
-    environment_id: supplied.environment_id !== undefined
-      ? supplied.environment_id
-      : app.environment_id,
+    environment_id: supplied.environment_id ?? null,
     internal_protocol: supplied.internal_protocol ?? "http",
     sticky: supplied.sticky ?? false,
     rate_limit_rps: supplied.rate_limit_rps ?? 0,
@@ -218,7 +215,8 @@ function normalizedSpec(req: DeployRequest) {
     image_ref: req.image_ref ?? "",
     container_port: req.container_port,
     environment_id: req.environment_id,
-    env_projection: req.env_projection ?? null,
+    env: req.env ?? {},
+    outputs: req.outputs ?? {},
     storage: req.storage ?? {},
     public: req.public ?? true,
     memory_mb: req.memory_mb ?? 0,
@@ -267,7 +265,7 @@ function comparableApp(app: AppRow) {
     image_ref: app.image_ref || "",
     container_port: app.container_port,
     environment_id: app.environment_id,
-    env_projection: db.parseAppEnvProjection(app),
+    ...parseRuntimeConfig(app.env_vars),
     storage: getAppStorage(app.id),
     public: !!app.public,
     memory_mb: app.memory_mb ?? 0,
@@ -327,7 +325,7 @@ export function deployRequestFromApp(app: AppRow): DeployRequest {
     image_ref: app.image_ref,
     container_port: app.container_port,
     environment_id: app.environment_id,
-    env_projection: db.parseAppEnvProjection(app),
+    ...parseRuntimeConfig(app.env_vars),
     storage: getAppStorage(app.id),
     public: current.public,
     memory_mb: current.memory_mb,
@@ -384,7 +382,12 @@ export function diffAppConfig(app: AppRow, req: DeployRequest): AppConfigChange[
   const changes: AppConfigChange[] = [];
   for (const [field, value] of Object.entries(after)) {
     if (!sameValue(before[field], value)) {
-      changes.push({ field, before: before[field], after: value });
+      const redact = (input: unknown) => field === "env"
+        ? Object.fromEntries(Object.entries((input ?? {}) as Record<string, unknown>).map(([key, entry]) => [key, typeof entry === "string" ? "••••••••" : entry]))
+        : field === "outputs"
+          ? Object.fromEntries(Object.entries((input ?? {}) as Record<string, unknown>).map(([key]) => [key, "••••••••"]))
+          : input;
+      changes.push({ field, before: redact(before[field]), after: redact(value) });
     }
   }
   return changes;
@@ -397,21 +400,8 @@ async function applyEnvironment(app: AppRow, req: DeployRequest): Promise<void> 
     }
     db.updateAppEnvironment(app.id, req.environment_id);
   }
-  if (!req.env_vars) return;
-  const incoming = await processIncomingEnvVars(req.env_vars);
-  if (incoming.entries.length === 0) return;
-  const current = db.getApp(app.id);
-  let env = current?.environment_id ? db.getEnvironment(current.environment_id) : null;
-  if (!env) {
-    let name = app.name;
-    let suffix = 1;
-    while (db.getEnvironments().some((e) => e.name === name)) name = `${app.name}-${suffix++}`;
-    env = db.insertEnvironment(name, serializeEnvVars([]));
-    db.updateAppEnvironment(app.id, env.id);
-  }
-  const incomingKeys = new Set(incoming.entries.map((e) => e.key));
-  const retained = parseEnvVars(env.env_vars).entries.filter((e) => !incomingKeys.has(e.key));
-  db.updateEnvironment(env.id, env.name, serializeEnvVars([...retained, ...incoming.entries]));
+  const config = serializeRuntimeConfig(req);
+  if (config !== app.env_vars) db.updateAppEnvVars(app.id, config);
 }
 
 /** Apply a complete normalized desired spec to an existing app. It never
@@ -442,6 +432,7 @@ export async function applyAppConfig(
   const desired = normalizedSpec(effective);
   const changes = diffAppConfig(app, effective);
   const changed = new Set(changes.map((c) => c.field));
+  await preflightRuntimeEnv(runtimeAppFromRequest(effective, app.stack_id));
   await prepareStorageBindings(app, desired.storage);
   await applyEnvironment(app, effective);
   if (changed.has("storage")) saveAppStorage(app.id, desired.storage);
@@ -460,7 +451,6 @@ export async function applyAppConfig(
   }
   if (changed.has("container_port")) db.updateAppContainerPort(app.id, desired.container_port);
   if (changed.has("domain") && req.domain !== undefined) db.updateAppDomain(app.id, req.domain);
-  if (changed.has("env_projection")) db.updateAppEnvProjection(app.id, desired.env_projection);
   if (changed.has("public")) db.updateAppPublic(app.id, desired.public);
   if (changed.has("memory_mb")) db.updateAppMemory(app.id, desired.memory_mb);
   if (changed.has("cpu_limit")) db.updateAppCpu(app.id, desired.cpu_limit);

@@ -269,7 +269,7 @@ function seedFleet(): void {
       domain: `${uid()}.example.com`,
       image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
-      env_vars: "{}",
+      env_vars: JSON.stringify({ env: {}, outputs: {} }),
       environment_id: environmentId,
     }).id;
 
@@ -977,6 +977,7 @@ describe("scope semantics through the real routes", () => {
   });
 
   test("environment dry-run reports stale consumers before mutating desired state", async () => {
+    db.updateAppEnvVars(appA, JSON.stringify({ env: { PREVIEW_ONLY: { from: "environment.PREVIEW_ONLY" } }, outputs: {} }));
     const ctx = await userWith([grant("environments.secrets", "environment", envA)]);
     const before = db.getEnvironment(envA)!.env_vars;
     const res = await handleUpdateEnvironment(

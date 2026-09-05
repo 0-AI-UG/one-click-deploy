@@ -14,39 +14,52 @@ ocd envs show production
 Use `--secret-file`, `--secret-stdin`, `--from-env`, or `--from-dotenv` when a
 secret should not appear in argv.
 
-## Link an app declaratively
+## Exact runtime configuration
 
-Set the environment name in `.ocd-deploy.json`:
+The app manifest maps every runtime variable to a literal or a reference:
 
 ```json
 {
-  "environment": "production"
+  "environment": "production",
+  "env": {
+    "NODE_ENV": "production",
+    "DATABASE_URL": { "from": "environment.DATABASE_URL" }
+  }
 }
 ```
 
-Then run:
+Only mapped variables are delivered from the environment resource. Missing
+references fail before rollout. An omitted env map means no user variables.
+Omitting `environment` or setting it to `null` detaches a standalone app;
+stack members inherit the stack selection unless their child manifest selects
+another environment or explicitly uses `null`.
+
+Deploy reads stored values; it never creates an environment, merges defaults,
+prompts for missing variables, or modifies shared values. Literals remain in
+the manifest. Keep secrets in environments and reference them explicitly.
+
+Create credentials before deploying:
 
 ```bash
-ocd deploy --dry-run
-ocd deploy
+ocd envs generate production SESSION_SECRET --type=password
+ocd envs generate production DATABASE_USER --type=username
 ```
 
-Use `"environment": null` to detach the current environment. On an existing
-app, omission retains its link. The CLI resolves names to IDs only for the wire
-request; names remain the portable manifest model.
+Generation creates a missing value only; an existing value is retained.
+Rotation is a separate explicit environment update.
 
-## Declared app variables
+## Injection and rollout
 
-The manifest `env` array describes required/default/secret inputs. Provide
-non-committed values with repeatable `--set=KEY=VALUE`. Existing values from
-the manifest-linked environment satisfy declared keys, and `--set` wins.
+Values are resolved when containers are created, written to a protected host
+env file, and passed through Docker's `--env-file`. They are runtime variables,
+not build arguments or frontend compile-time configuration. Stored values are
+encrypted; referenced secrets and derived secret outputs remain masked.
 
-## Rollout after editing an environment
-
-Environment variable resource commands may offer rollout behavior for all apps
-already linked to that environment. This updates the variable bag; it does not
-change which environment an app desires. App linkage changes only through the
-manifest.
+Environment updates roll out affected apps that reference changed keys.
+`--no-rollout` leaves running containers unchanged until a later recreation.
+App-to-app references use `apps.MEMBER.outputs.KEY`; see
+[Stack manifests](stack-manifest.md). Outputs are resolved directly and are
+never persisted into the shared environment.
 
 ## Object-storage access
 
@@ -54,7 +67,7 @@ Prefer app-owned `storage` bindings in the manifest; see
 [Object storage bindings](app-manifest.md#object-storage-bindings).
 Bindings need an existing bucket and administrator authorization to deploy.
 OCD injects scoped tokens directly into each app, overriding same-named
-shared-environment values and bypassing variable projection. Keep driver
+app env values. Keep driver
 selection such as `STORAGE_DRIVER=ocd` in normal configuration. The token is
 for OCD's `/api/storage/authorize` API, not an S3 access key. Object bytes move
 directly between the app and storage using short-lived authorized URLs.

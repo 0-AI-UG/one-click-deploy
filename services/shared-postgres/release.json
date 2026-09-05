@@ -5,25 +5,35 @@
   "container_port": 5432,
   "public": false,
   "internal_protocol": "tcp",
-  "env": [
-    {
-      "key": "POSTGRES_USER",
-      "default": "postgres"
+  "env": {
+    "POSTGRES_USER": {
+      "from": "environment.POSTGRES_USER"
     },
-    {
-      "key": "POSTGRES_PASSWORD",
-      "generate": "password",
-      "secret": true
+    "POSTGRES_PASSWORD": {
+      "from": "environment.POSTGRES_PASSWORD"
     },
-    {
-      "key": "POSTGRES_DB",
-      "default": "postgres"
+    "POSTGRES_DB": {
+      "from": "environment.POSTGRES_DB"
     },
-    {
-      "key": "PGDATA",
-      "default": "/var/lib/postgresql/data/pgdata"
+    "PGDATA": {
+      "from": "environment.PGDATA"
+    },
+    "FOODY_ROLE_PASSWORD": {
+      "from": "environment.FOODY_ROLE_PASSWORD"
+    },
+    "BACKUP_ROLE_PASSWORD": {
+      "from": "environment.BACKUP_ROLE_PASSWORD"
+    },
+    "SKYLINE_ROLE_PASSWORD": {
+      "from": "environment.SKYLINE_ROLE_PASSWORD"
+    },
+    "DOCS_ROLE_PASSWORD": {
+      "from": "environment.DOCS_ROLE_PASSWORD"
+    },
+    "SIGHT_ROLE_PASSWORD": {
+      "from": "environment.SIGHT_ROLE_PASSWORD"
     }
-  ],
+  },
   "volume": {
     "size": 10,
     "path": "/var/lib/postgresql/data",
@@ -35,26 +45,15 @@
     "mode": "exec",
     "command": "pg_isready -U postgres -d postgres"
   },
-  "exports": {
-    "HOST": {
-      "value": "{app.host}"
-    },
-    "PORT": {
-      "value": "{app.port}"
-    }
-  },
   "image": "ghcr.io/0-ai-ug/ocd-shared-postgres@sha256:e43f62150d6e35bf1dd219f8f54542be6a5db818f5e374e51d8975b306238544",
   "environment": "shared-data",
-  "env_projection": [
-    "POSTGRES_USER",
-    "POSTGRES_PASSWORD",
-    "POSTGRES_DB",
-    "PGDATA",
-    "BACKUP_ROLE_PASSWORD",
-    "FOODY_ROLE_PASSWORD",
-    "SIGHT_ROLE_PASSWORD",
-    "SKYLINE_ROLE_PASSWORD",
-    "DOCS_ROLE_PASSWORD"
-  ],
-  "suggested_app_name": "ocd-shared-postgres"
+  "suggested_app_name": "ocd-shared-postgres",
+  "outputs": {
+    "HOST": {
+      "template": "{app.host}"
+    },
+    "PORT": {
+      "template": "{app.port}"
+    }
+  }
 }

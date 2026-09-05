@@ -587,7 +587,7 @@ describe("deploy: private apps", () => {
     expect(app.internal_port).toBeGreaterThanOrEqual(db.INTERNAL_PORT_BASE);
   });
 
-  test("insert_app_row layers env_vars on top of a linked environment (existing wins, new keys added)", async () => {
+  test("insert_app_row resolves explicit mappings without mutating shared values", async () => {
     const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
     const server = makeReadyServer();
     const linked = db.insertEnvironment(
@@ -595,20 +595,21 @@ describe("deploy: private apps", () => {
       serializeEnvVars([{ key: "KEEP", value: "orig", secret: false, updated_at: "t" }]),
     );
     const step = stepByName("insert_app_row");
-    // KEEP already lives in the env (should persist); ADDED is new (should land).
+    // Literals stay local to this app; references read shared values.
     const { ctx } = makeCtx({
       app_name: `link-${randomSuffix()}`,
       image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       public: false,
       environment_id: linked.id,
-      env_vars: [{ key: "ADDED", value: "new", secret: false }],
+      env: {KEEP:{from:"environment.KEEP"},ADDED:"new"},
     });
-    const out = (await step.run(ctx, serverPrior(server))) as { environmentId: number };
+    const out = (await step.run(ctx, serverPrior(server))) as { environmentId: number; flatEnvVars: Record<string,string> };
     expect(out.environmentId).toBe(linked.id);
     const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
     const flat = await resolveEnvVarsForDeploy(db.getEnvironment(linked.id)!.env_vars);
-    expect(flat).toEqual({ KEEP: "orig", ADDED: "new" });
+    expect(flat).toEqual({ KEEP: "orig" });
+    expect(out.flatEnvVars).toEqual({ KEEP: "orig", ADDED: "new" });
   });
 
   test("finalize_deploy succeeds only after every desired replica is attested", async () => {
@@ -878,6 +879,7 @@ describe("deploy step: insert_app_row deploy targets", () => {
       target: "staging",
       target_of: parent.id,
       environment_id: stagingEnv.id,
+      env: {DATABASE_URL:{from:"environment.DATABASE_URL"}},
       placement_pool: "staging",
     });
     const out = (await step.run(ctx, serverPrior(server))) as {
@@ -965,66 +967,6 @@ describe("deploy step: insert_app_row deploy targets", () => {
     expect(db.getEnvironments().some((e) => e.name === stagingName)).toBe(false);
     expect(out.environmentId).toBeNull();
     expect(out.flatEnvVars).toEqual({});
-  });
-});
-
-describe("contract: engine deploy back-compat shim for legacy env_label/sibling_of (T3a)", () => {
-  // REGRESSION: currently failing by design — pinned desired behavior
-  test("a DeployRequest carrying env_label/sibling_of behaves exactly like target/target_of", async () => {
-    const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
-    const server = db.insertServer({
-      name: `srv-${randomSuffix()}`,
-      provider_id: `h-${randomSuffix()}`,
-      ipv4: "3.3.3.6",
-      ipv6: "",
-      type: "cx22",
-      location: "fsn1",
-      status: "ready",
-      routing_address: "10.0.0.6",
-    });
-    const parentName = `legacy-${randomSuffix()}`;
-    const parentEnv = db.insertEnvironment(
-      parentName,
-      serializeEnvVars([{ key: "SEED", value: "from-prod", secret: false, updated_at: "t" }]),
-    );
-    const parent = db.insertApp({
-      name: parentName,
-      domain: `${parentName}.example.com`,
-      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      container_port: 3000,
-      env_vars: "{}",
-      environment_id: parentEnv.id,
-    });
-    const stagingName = `${parentName}-staging`;
-
-    const step = deployOp.steps.find((s) => s.name === "insert_app_row")!;
-    // Legacy wire field names only — NOT target/target_of.
-    const { ctx } = makeCtx({
-      app_name: stagingName,
-      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      container_port: 3000,
-      env_label: "staging",
-      sibling_of: parent.id,
-    });
-    const out = (await step.run(ctx, {
-      pick_or_provision_server: {
-        serverId: server.id,
-        serverIp: server.ipv4,
-        serverHostKey: "",
-        provisioned: false,
-        ingressIp: server.ipv4,
-      },
-      create_volume: null,
-    })) as { appId: number; environmentId: number | null; flatEnvVars: Record<string, string> };
-
-    // Target tag stored + target_of link set from the legacy names — that's all
-    // the shim does. There is no isolated-env creation or inheritance anymore.
-    const app = db.getApp(out.appId)!;
-    expect(app.target).toBe("staging");
-    expect(app.target_of).toBe(parent.id);
-    expect(out.environmentId).toBeNull();
-    expect(out.flatEnvVars).toEqual({});
-    expect(db.getEnvironments().some((e) => e.name === stagingName)).toBe(false);
   });
 });
 

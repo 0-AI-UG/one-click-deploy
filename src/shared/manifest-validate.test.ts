@@ -18,14 +18,13 @@ const _deploy: DeployManifest = {
   name: "web",
   build: BUILD,
   container_port: 3000,
-  env: [{ key: "PORT", default: "3000", required: false, secret: false }],
+  env: { PORT: "3000" },
   volume: { size: 5, path: "/data" },
   health_check: { enabled: false, path: "/healthz" },
   internal_protocol: "http",
   public_port: "auto",
   public_protocol: "tcp",
   domain: "web.example.com",
-  env_projection: ["DATABASE_URL"],
   environment: "production",
   auth: { enabled: true, password_env: "OCD_BASIC_AUTH_PASSWORD" },
   placement_pool: "production",
@@ -55,7 +54,7 @@ const validApp = {
   volume: null,
   build: BUILD,
   container_port: 3000,
-  env: [{ key: "PORT", default: "3000" }],
+  env: { PORT: "3000" },
   health_check: { enabled: false },
   internal_protocol: "http" as const,
 };
@@ -67,9 +66,9 @@ describe("validateDeployManifest", () => {
       image: "postgres:17-alpine",
       container_port: 5432,
       volume: { size: 10, path: "/var/lib/postgresql/data" },
-      env: [{ key: "POSTGRES_PASSWORD", generate: "password", secret: true }],
-      exports: {
-        URL: { value: "postgresql://postgres:{env.POSTGRES_PASSWORD}@{app.host}:{app.port}/postgres", secret: true },
+      env: { POSTGRES_PASSWORD: { from: "environment.POSTGRES_PASSWORD" } },
+      outputs: {
+        URL: { template: "postgresql://postgres:{env.POSTGRES_PASSWORD}@{app.host}:{app.port}/postgres", secret: true },
       },
       cap_add: ["CHOWN", "SETUID", "SETGID"],
       post_start: { command: "pg_isready" },
@@ -241,7 +240,7 @@ describe("validateDeployManifest", () => {
         volume: null,
         build: BUILD,
         domain: "web.example.com",
-        env_projection: [],
+        env: {},
         auth: { enabled: true, password_env: "OCD_BASIC_AUTH_PASSWORD" },
         placement_pool: "production",
         scale_to_zero_after: 0,
@@ -327,44 +326,14 @@ describe("validateStackManifest", () => {
     expect(() => validateStackManifest(validStack, "ocd-stack.json")).not.toThrow();
   });
 
-  test("stack staging environment declarations validate", () => {
-    expect(() => validateStackManifest({
-      ...validStack,
-      staging_env: [
-        { key: "PUBLIC_BASE_URL", default: "https://staging.example.com" },
-        { key: "STRIPE_SECRET_KEY", required: true, secret: true },
-      ],
-    }, "ocd-stack.json")).not.toThrow();
+  test("selects an existing staging environment", () => {
+    expect(() => validateStackManifest({ ...validStack, staging_environment: "staging" }, "ocd-stack.json")).not.toThrow();
   });
-
-  test("stack app environment projections accept selected keys and an empty list", () => {
-    expect(() => validateStackManifest({
-      $schema: 1,
-      name: "projected",
-      apps: {
-        api: { manifest: "api/.ocd-deploy.json", env: ["DATABASE_URL", "JWT_SECRET"] },
-        docs: { manifest: "docs/.ocd-deploy.json", env: [] },
-      },
-    }, "ocd-stack.json")).not.toThrow();
-
-    expect(() => validateStackManifest({
-      $schema: 1,
-      name: "bad-projection",
-      apps: {
-        api: { manifest: "api/.ocd-deploy.json", env: "DATABASE_URL" },
-      },
-    }, "ocd-stack.json")).toThrow("apps.api.env");
-  });
-
-  test("env_all opts into all keys and cannot combine with env", () => {
-    expect(() => validateStackManifest({
-      name: "legacy",
-      apps: { web: { manifest: "web/.ocd-deploy.json", env_all: true } },
-    }, "ocd-stack.json")).not.toThrow();
-    expect(() => validateStackManifest({
-      name: "ambiguous",
-      apps: { web: { manifest: "web/.ocd-deploy.json", env: ["SAFE"], env_all: true } },
-    }, "ocd-stack.json")).toThrow(/env_all.*cannot be combined/i);
+  test("rejects removed stack configuration fields", () => {
+    for (const field of ["env", "env_all"]) {
+      expect(() => validateStackManifest({ name: "s", apps: { web: { manifest: "web.json", [field]: [] } } }, "ocd-stack.json")).toThrow(field);
+    }
+    expect(() => validateStackManifest({ ...validStack, staging_env: [] }, "ocd-stack.json")).toThrow("staging_env");
   });
 
   test("needs referencing a missing app key fails", () => {
@@ -404,5 +373,25 @@ describe("validateStackManifest", () => {
       'Manifest ocd-stack.json: unknown key "extra" (ignored by --allow-unknown)',
     );
     warn.mockRestore();
+  });
+});
+
+describe("explicit runtime environment", () => {
+  test("accepts literals and resource references", () => {
+    expect(() => validateDeployManifest({ ...validApp, env: {
+      EMPTY: "", MODE: "production", TOKEN: { from: "environment.API_TOKEN" },
+      DATABASE_URL: { from: "apps.database.outputs.URL" },
+    } }, "app.json")).not.toThrow();
+  });
+  test("rejects removed declarations and malformed references", () => {
+    for (const env of [[{ key: "TOKEN" }], { TOKEN: { from: "API_TOKEN" } }, { TOKEN: 1 }, { "BAD-KEY": "value" }]) {
+      expect(() => validateDeployManifest({ ...validApp, env }, "app.json")).toThrow("env");
+    }
+    for (const field of ["env_projection", "exports"]) {
+      expect(() => validateDeployManifest({ ...validApp, [field]: {} }, "app.json")).toThrow(field);
+    }
+  });
+  test("rejects unsupported output template placeholders", () => {
+    expect(() => validateDeployManifest({ ...validApp, outputs: { URL: { template: "{environment.TOKEN}" } } }, "app.json")).toThrow("template");
   });
 });

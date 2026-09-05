@@ -11,9 +11,12 @@
     "webhook": false
   },
   "container_port": 80,
-  "env": [
-    { "key": "NODE_ENV", "default": "production" }
-  ],
+  "env": {
+    "NODE_ENV": "production",
+    "API_URL": {
+      "from": "apps.api.outputs.URL"
+    }
+  },
   "volume": null,
   "suggested_app_name": "blog-web",
   "compress": true

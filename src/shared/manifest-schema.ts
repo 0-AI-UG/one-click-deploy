@@ -129,32 +129,29 @@ const buildSchema = z.object({
   }
 });
 
-/** One declared env var. `key` must be a valid env-var name. */
-const envEntrySchema = z.object(
-  {
-    key: z
-      .string({ error: "expected env-var-name string" })
-      .refine((v) => ENV_KEY_PATTERN.test(v), {
-        error: (iss) => `expected env-var-name string, got ${got(iss.input)}`,
-      }),
-    description: z.string({ error: "expected string" }).optional(),
-    default: z.string({ error: "expected string" }).optional(),
-    required: z.boolean({ error: "expected boolean" }).optional(),
-    secret: z.boolean({ error: "expected boolean" }).optional(),
-    /** Generate a value when the target environment does not already contain
-     * this key. Generated values are persisted like any other environment
-     * value, so a later reconcile preserves rather than rotates them. */
-    generate: z.enum(["password", "username"], {
-      error: 'expected "password" or "username"',
-    }).optional(),
-  },
-  { error: 'expected object with a "key"' },
+/** Exact runtime variables: literal strings or explicit resource references. */
+export const RuntimeEnvSchema = z.record(
+  z.string().regex(ENV_KEY_PATTERN, "expected env-var-name key"),
+  z.union([
+    z.string(),
+    z.object({ from: z.string().regex(
+      /^(?:environment\.[A-Za-z_][A-Za-z0-9_]*|apps\.[a-z0-9][a-z0-9-]*\.outputs\.[A-Za-z_][A-Za-z0-9_]*)$/,
+      "expected environment.KEY or apps.MEMBER.outputs.KEY",
+    ) }).strict(),
+  ]),
 );
-
-const exportEntrySchema = z.object({
-  value: nonEmptyString("expected a non-empty template string"),
-  secret: z.boolean({ error: "expected boolean" }).optional(),
-}, { error: "expected object { value, secret? }" }).strict();
+export const RuntimeOutputsSchema = z.record(
+  z.string().regex(ENV_KEY_PATTERN, "expected output name"),
+  z.object({
+    template: nonEmptyString("expected a non-empty template string").refine(
+      (value) => !value.replace(/\{(?:app\.(?:host|port)|env\.[A-Za-z_][A-Za-z0-9_]*)\}/g, "").match(/[{}]/),
+      "templates accept only {app.host}, {app.port}, and {env.KEY}",
+    ),
+    secret: z.boolean().optional(),
+  }).strict(),
+);
+export type RuntimeEnv = z.infer<typeof RuntimeEnvSchema>;
+export type RuntimeOutputs = z.infer<typeof RuntimeOutputsSchema>;
 
 const commandSchema = z.array(
   nonEmptyString("expected a non-empty command argument"),
@@ -320,22 +317,9 @@ export const DeployManifestSchema = z
       "expected integer 1-65535",
       (v) => Number.isInteger(v) && v >= 1 && v <= 65535,
     ).optional(),
-    env: z
-      .array(envEntrySchema, {
-        error: "expected array of { key, description?, default?, required?, secret? }",
-      })
-      .optional(),
-    /** Values exported to dependents in a stack. The map key becomes
-     * `<MEMBER>_<KEY>` and the template may reference `{app.host}`,
-     * `{app.port}`, and `{env.NAME}`. */
+    env: RuntimeEnvSchema.optional(),
     storage: StorageBindingsSchema.optional(),
-    exports: z.record(
-      z.string().refine((key) => ENV_KEY_PATTERN.test(key), {
-        error: "expected env-var-name export key",
-      }),
-      exportEntrySchema,
-      { error: "expected object map of export key -> { value, secret? }" },
-    ).optional(),
+    outputs: RuntimeOutputsSchema.optional(),
     /** Existing environment selected by name; null explicitly detaches it. */
     environment: z.union([
       nonEmptyString("expected a non-empty environment name"),
@@ -348,10 +332,6 @@ export const DeployManifestSchema = z
     suggested_app_name: z.string({ error: "expected string" }).optional(),
     /** Custom public domain. */
     domain: z.string({ error: "expected string" }).optional(),
-    /** Limit a linked environment to selected keys. null/omit = all, [] = none. */
-    env_projection: z.array(z.string({ error: "expected an environment key string" }), {
-      error: "expected array of environment variable keys",
-    }).optional(),
     auth: authSchema.optional(),
     replicas: guardedNumber(
       "expected positive integer",
@@ -432,15 +412,6 @@ export const DeployManifestSchema = z
         path: value.build ? ["image"] : ["build"],
       });
     }
-    for (const [index, entry] of (value.env ?? []).entries()) {
-      if (entry.generate && entry.default !== undefined) {
-        ctx.addIssue({
-          code: "custom",
-          message: "cannot be combined with default",
-          path: ["env", index, "generate"],
-        });
-      }
-    }
     if (
       value.autoscaling?.max_replicas !== undefined &&
       value.replicas !== undefined &&
@@ -469,24 +440,8 @@ const stackAppSchema = z
       .optional(),
     domain: z.string({ error: "expected string" }).optional(),
     public: z.boolean({ error: "expected boolean" }).optional(),
-    /** Keys this member receives from the shared stack environment. Omit to
-     *  derive least privilege from the child manifest and declared needs. */
-    env: z.array(z.string({ error: "expected an environment key string" }), {
-      error: "expected array of environment variable keys",
-    }).optional(),
-    /** Explicitly opt this member into the complete shared environment. */
-    env_all: z.boolean({ error: "expected boolean" }).optional(),
-  }, { error: "expected object { manifest, needs?, domain?, public?, env?, env_all? }" })
-  .strict()
-  .superRefine((value, ctx) => {
-    if (value.env !== undefined && value.env_all) {
-      ctx.addIssue({
-        code: "custom",
-        message: "cannot be combined with env; choose an explicit key list or env_all",
-        path: ["env_all"],
-      });
-    }
-  });
+  }, { error: "expected object { manifest, needs?, domain?, public? }" })
+  .strict();
 
 export const StackManifestSchema = z
   .object({
@@ -502,9 +457,6 @@ export const StackManifestSchema = z
       nonEmptyString("expected a non-empty environment name"),
       z.null(),
     ]).optional(),
-    /** Desired overrides applied after the staging environment is
-     * created/copied. Secret values are supplied by the CLI, not stored here. */
-    staging_env: z.array(envEntrySchema, { error: "expected array of environment variable definitions" }).optional(),
     apps: z.record(z.string(), stackAppSchema, { error: "expected object map of key -> app" }),
   })
   .strict()

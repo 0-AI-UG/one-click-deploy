@@ -11,11 +11,26 @@
     "webhook": false
   },
   "container_port": 8080,
-  "env": [
-    { "key": "JWT_SECRET", "description": "Signing key for auth tokens", "required": true, "secret": true },
-    { "key": "LOG_LEVEL", "default": "info" }
-  ],
+  "env": {
+    "JWT_SECRET": {
+      "from": "environment.JWT_SECRET"
+    },
+    "LOG_LEVEL": "info",
+    "DATABASE_URL": {
+      "from": "apps.database.outputs.URL"
+    },
+    "REDIS_URL": {
+      "from": "apps.redis.outputs.URL"
+    }
+  },
   "volume": null,
-  "health_check": { "path": "/health" },
-  "suggested_app_name": "blog-api"
+  "health_check": {
+    "path": "/health"
+  },
+  "suggested_app_name": "blog-api",
+  "outputs": {
+    "URL": {
+      "template": "http://{app.host}:{app.port}"
+    }
+  }
 }

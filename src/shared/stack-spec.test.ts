@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { DeployManifest, StackManifest } from "./rpc.ts";
-import { buildStackAppSpec } from "./stack-spec.ts";
+import { buildStackAppSpec, validateStackReferences } from "./stack-spec.ts";
 
 const BUILD = {
   repository: "https://github.com/acme/app",
@@ -18,7 +18,7 @@ describe("buildStackAppSpec", () => {
       build: BUILD,
       domain: "manifest.example.com",
       container_port: 8080,
-      env_projection: ["DATABASE_URL"],
+      env: { DATABASE_URL: { from: "environment.DATABASE_URL" } },
       environment: "production",
       replicas: 3,
       public: true,
@@ -52,7 +52,6 @@ describe("buildStackAppSpec", () => {
       needs: ["database"],
       domain: "stack.example.com",
       public: false,
-      env: ["DATABASE_URL", "JWT_SECRET"],
     };
 
     const spec = buildStackAppSpec(
@@ -70,7 +69,7 @@ describe("buildStackAppSpec", () => {
       domain: "stack.example.com",
       build: BUILD,
       container_port: 8080,
-      env_projection: ["DATABASE_URL", "JWT_SECRET"],
+      env: { DATABASE_URL: { from: "environment.DATABASE_URL" } },
       environment: "production",
       replicas: 3,
       public: false,
@@ -101,7 +100,7 @@ describe("buildStackAppSpec", () => {
     });
   });
 
-  test("uses app-manifest domain and projection when the stack does not override them", () => {
+  test("uses app-manifest domain and env when the stack does not override them", () => {
     const spec = buildStackAppSpec(
       "web",
       { manifest: ".ocd-deploy.json" },
@@ -110,47 +109,41 @@ describe("buildStackAppSpec", () => {
         build: BUILD,
         volume: null,
         domain: "web.example.com",
-        env_projection: [],
+        env: {},
         durability_class: "standard",
       },
       "https://github.com/acme/web",
       "",
     );
     expect(spec.domain).toBe("web.example.com");
-    expect(spec.env_projection).toEqual([]);
+    expect(spec.env).toEqual({});
     expect(spec.durability_class).toBe("standard");
   });
 
-  test("defaults a new stack member to only child-manifest declarations", () => {
-    const spec = buildStackAppSpec(
-      "docs",
-      { manifest: "docs/.ocd-deploy.json", needs: ["api"] },
-      {
-        name: "Docs",
-        build: BUILD,
-        volume: null,
-        env: [
-          { key: "DOCS_THEME", default: "light" },
-          { key: "SEARCH_TOKEN", required: true, secret: true },
-        ],
-      },
-      "https://github.com/acme/docs",
-      "docs",
-    );
-    expect(spec.env_projection_mode).toBe("declared");
-    expect(spec.env_projection).toEqual(["DOCS_THEME", "SEARCH_TOKEN"]);
-    expect(spec.declared_env_keys).toEqual(["DOCS_THEME", "SEARCH_TOKEN"]);
+  test("infers dependencies from explicit output references", () => {
+    const spec = buildStackAppSpec("web", { manifest: "web.json", needs: ["cache"] }, {
+      name: "web", image: "nginx", volume: null,
+      env: { URL: { from: "apps.database.outputs.URL" }, MODE: "production" },
+    }, "", "");
+    expect(spec.needs).toEqual(["cache", "database"]);
+    expect(spec.env).toEqual({ URL: { from: "apps.database.outputs.URL" }, MODE: "production" });
   });
+});
 
-  test("requires env_all for explicit access to every shared key", () => {
-    const spec = buildStackAppSpec(
-      "legacy",
-      { manifest: ".ocd-deploy.json", env_all: true },
-      { name: "Legacy", volume: null, build: BUILD },
-      "https://github.com/acme/legacy",
-      "",
-    );
-    expect(spec.env_projection_mode).toBe("all");
-    expect(spec.env_projection).toBeNull();
+describe("stack reference validation", () => {
+  const app = (key: string, env = {}, outputs = {}) => buildStackAppSpec(key, { manifest: `${key}.json` }, {
+    name: key, image: "nginx", volume: null, env, outputs,
+  }, "", "");
+  test("checks output existence", () => {
+    const web = app("web", { URL: { from: "apps.database.outputs.URL" } });
+    expect(() => validateStackReferences([web])).toThrow("missing output");
+    expect(() => validateStackReferences([web, app("database", {}, { URL: { template: "{app.host}:{app.port}" } })])).not.toThrow();
+  });
+  test("rejects reference cycles", () => {
+    const output = { URL: { template: "{app.host}" } };
+    expect(() => validateStackReferences([
+      app("a", { URL: { from: "apps.b.outputs.URL" } }, output),
+      app("b", { URL: { from: "apps.a.outputs.URL" } }, output),
+    ])).toThrow("cycle");
   });
 });

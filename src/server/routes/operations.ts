@@ -33,11 +33,11 @@ import { enforceConfirmation } from "../lib/action-confirm.ts";
 // tokens, credentials, and env-var values). Redacted in any op input/output
 // JSON returned to API clients.
 const SENSITIVE_KEY_RE =
-  /(password|passwd|secret|token|credential|connection_url|auth_password|api_key|access_key|private_key|env_vars?|env_overrides)/i;
+  /(password|passwd|secret|token|credential|connection_url|auth_password|api_key|access_key|private_key|env_vars?|env_overrides|^env$|^outputs$|flatEnvVars)/i;
 
 const REDACTED = "[redacted]";
 
-function redact(value: unknown): unknown {
+export function redact(value: unknown): unknown {
   if (value === null || value === undefined) return value;
   if (Array.isArray(value)) return value.map(redact);
   if (typeof value === "object") {

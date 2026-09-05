@@ -11,14 +11,22 @@
     "webhook": false
   },
   "container_port": 3000,
-  "env": [
-    { "key": "DATABASE_URL", "description": "Postgres connection string", "required": true, "secret": true },
-    { "key": "NODE_ENV", "default": "production" }
-  ],
-  "volume": { "size": 5, "path": "/data" },
-  "health_check": { "path": "/healthz" },
+  "env": {
+    "DATABASE_URL": {
+      "from": "environment.DATABASE_URL"
+    },
+    "NODE_ENV": "production"
+  },
+  "volume": {
+    "size": 5,
+    "path": "/data"
+  },
+  "health_check": {
+    "path": "/healthz"
+  },
   "suggested_app_name": "my-app",
   "replicas": 1,
   "memory_mb": 512,
-  "cpu_limit": 1
+  "cpu_limit": 1,
+  "environment": "production"
 }

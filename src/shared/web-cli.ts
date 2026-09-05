@@ -27,7 +27,7 @@ export type WebCliInput = {
   placeholder?: string;
   defaultValue?: string | boolean;
   /** Values sent to CLI stdin instead of argv. Used for secrets. */
-  transport?: "secret-vars" | "stdin" | "set-vars" | "staging-set-vars";
+  transport?: "secret-vars" | "stdin";
 };
 
 export type WebCliCommand = {
@@ -92,7 +92,7 @@ export const WEB_CLI_COMMANDS: WebCliCommand[] = [
   { id: "app.promote", category: "Apps", label: "Promote staging", description: "Promote the exact deployed source version to another app.", args: ["promote"], inputs: [{ ...app("Source app"), key: "from", label: "From", positional: false, flag: "from" }, { ...app("Destination app"), key: "to", label: "To", positional: false, flag: "to" }], danger: true },
   { id: "app.delete", category: "Apps", label: "Delete app", description: "Destroy app containers; DNS stays operator-owned and managed volumes are detached and retained.", args: ["delete"], inputs: [app()], danger: true },
   { id: "app.release", category: "Apps", label: "Deploy existing artifact", description: "Release an externally built immutable image digest while retaining configuration.", args: ["release"], inputs: [app(), { key: "image", label: "Immutable image", kind: "text", required: true, flag: "image" }, { key: "commit", label: "Source commit", kind: "text", flag: "commit" }] },
-  { id: "app.deploy", category: "Apps", label: "Build and deploy manifest", description: "Build the exact Git commit on an OCD worker and apply complete desired state.", args: ["deploy"], inputs: [{ key: "manifest", label: "Manifest path", kind: "text", required: true, positional: true }, { key: "commit", label: "Git commit", kind: "text", required: true, flag: "commit" }, { key: "appName", label: "App name override", kind: "text", flag: "app" }, { key: "vars", label: "Environment overrides", kind: "key-value", repeatable: true, transport: "set-vars" }, { key: "dryRun", label: "Preview only", kind: "boolean", flag: "dry-run" }, { key: "configOnly", label: "Configuration only", kind: "boolean", flag: "config-only" }, { key: "allowUnknown", label: "Allow unknown manifest keys", kind: "boolean", flag: "allow-unknown" }] },
+  { id: "app.deploy", category: "Apps", label: "Build and deploy manifest", description: "Build the exact Git commit on an OCD worker and apply complete desired state.", args: ["deploy"], inputs: [{ key: "manifest", label: "Manifest path", kind: "text", required: true, positional: true }, { key: "commit", label: "Git commit", kind: "text", required: true, flag: "commit" }, { key: "appName", label: "App name override", kind: "text", flag: "app" }, { key: "dryRun", label: "Preview only", kind: "boolean", flag: "dry-run" }, { key: "configOnly", label: "Configuration only", kind: "boolean", flag: "config-only" }, { key: "allowUnknown", label: "Allow unknown manifest keys", kind: "boolean", flag: "allow-unknown" }] },
 
   { id: "scale.wake", category: "Scaling", label: "Wake app", description: "Wake a scaled-to-zero app.", args: ["scale", "wake"], inputs: [app()] },
   { id: "scale.policy", category: "Scaling", label: "Show scaling policy", description: "Show the manifest-applied scaling policy.", args: ["scale", "policy", "show"], inputs: [app()] },
@@ -103,7 +103,7 @@ export const WEB_CLI_COMMANDS: WebCliCommand[] = [
   { id: "stacks.logs", category: "Stacks", label: "Stack deploy log", description: "Print the stack's deploy log.", args: ["stack", "logs"], inputs: [stack()] },
   { id: "stacks.member-logs", category: "Stacks", label: "Member logs", description: "Print current logs for every readable member.", args: ["stack", "member-logs"], inputs: [stack(), positiveNumber("tail", "Lines per member", { flag: "tail", defaultValue: "100", max: 10000 })] },
   { id: "stacks.promote", category: "Stacks", label: "Promote stack", description: "Promote ready staging siblings in dependency order.", args: ["promote", "stack"], inputs: [stack()], danger: true },
-  { id: "stacks.deploy", category: "Stacks", label: "Deploy stack", description: "Deploy a stack from digest-pinned manifests.", args: ["deploy", "stack"], inputs: [{ key: "manifest", label: "Stack manifest path", kind: "text", required: true, positional: true }, { key: "commit", label: "Git commit", kind: "text", required: true, flag: "commit" }, { key: "vars", label: "Environment overrides", kind: "key-value", repeatable: true, transport: "set-vars" }, { key: "stagingVars", label: "Staging overrides", kind: "key-value", repeatable: true, transport: "staging-set-vars" }, { key: "only", label: "Members", kind: "text", flag: "only" }, { key: "withDependents", label: "Include dependents", kind: "boolean", flag: "with-dependents" }, { key: "changed", label: "Changed members only", kind: "boolean", flag: "changed" }, { key: "all", label: "All members", kind: "boolean", flag: "all" }, { key: "configOnly", label: "Configuration only", kind: "boolean", flag: "config-only" }, { key: "allowUnknown", label: "Allow unknown manifest keys", kind: "boolean", flag: "allow-unknown" }] },
+  { id: "stacks.deploy", category: "Stacks", label: "Deploy stack", description: "Deploy a stack from digest-pinned manifests.", args: ["deploy", "stack"], inputs: [{ key: "manifest", label: "Stack manifest path", kind: "text", required: true, positional: true }, { key: "commit", label: "Git commit", kind: "text", required: true, flag: "commit" }, { key: "only", label: "Members", kind: "text", flag: "only" }, { key: "withDependents", label: "Include dependents", kind: "boolean", flag: "with-dependents" }, { key: "changed", label: "Changed members only", kind: "boolean", flag: "changed" }, { key: "all", label: "All members", kind: "boolean", flag: "all" }, { key: "configOnly", label: "Configuration only", kind: "boolean", flag: "config-only" }, { key: "allowUnknown", label: "Allow unknown manifest keys", kind: "boolean", flag: "allow-unknown" }] },
   { id: "stacks.delete", category: "Stacks", label: "Delete stack", description: "Destroy a stack and all members.", args: ["delete", "stack"], inputs: [stack()], danger: true },
 
   { id: "envs.list", category: "Environments", label: "List environments", description: "List active environments.", args: ["envs", "list"], inputs: [] },
@@ -207,8 +207,6 @@ export function buildWebCliInvocation(
   const positional: string[] = [];
   const flags: string[] = [];
   const secretVars: Array<{ key: string; value: string }> = [];
-  const setVars: string[] = [];
-  const stagingSetVars: string[] = [];
   let stdinValue: string | undefined;
   for (const input of command.inputs) {
     const raw = values[input.key];
@@ -259,10 +257,6 @@ export function buildWebCliInvocation(
         if (input.flag) flags.push(`--${input.flag}`);
         continue;
       }
-      if (input.transport === "set-vars" || input.transport === "staging-set-vars") {
-        (input.transport === "set-vars" ? setVars : stagingSetVars).push(value);
-        continue;
-      }
       if (input.positional) {
         if (value.startsWith("-")) throw new Error(`${input.label} cannot start with a dash`);
         positional.push(value);
@@ -275,19 +269,16 @@ export function buildWebCliInvocation(
     ...positional,
     ...flags,
     ...(secretVars.length ? ["--secrets-stdin"] : []),
-    ...(setVars.length || stagingSetVars.length ? ["--sets-stdin"] : []),
     ...(command.fixedArgs || []),
   ];
   if (argv.reduce((total, value) => total + value.length, 0) > 64 * 1024) {
     throw new Error("Command parameters are too large");
   }
-  const transportCount = Number(secretVars.length > 0) + Number(stdinValue !== undefined) + Number(setVars.length > 0 || stagingSetVars.length > 0);
+  const transportCount = Number(secretVars.length > 0) + Number(stdinValue !== undefined);
   if (transportCount > 1) throw new Error("Multiple stdin transports cannot be combined");
   const stdin = secretVars.length
     ? JSON.stringify(secretVars)
-    : setVars.length || stagingSetVars.length
-      ? JSON.stringify({ sets: setVars, staging_sets: stagingSetVars })
-      : stdinValue;
+    : stdinValue;
   if (stdin && stdin.length > 256 * 1024) throw new Error("Secret parameters are too large");
   return { argv, stdin };
 }

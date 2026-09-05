@@ -1,3 +1,4 @@
+import { resolveRuntimeEnv, serializeRuntimeConfig } from "../../shared/runtime-env.ts";
 import { appStorageEnv, prepareStorageBindings, resolveStorageBindings, getAppStorage } from "../../shared/object-storage.ts";
 import * as db from "../../shared/db.ts";
 import {
@@ -8,9 +9,7 @@ import {
 } from "../../shared/remote/index.ts";
 import {
   platformEnvVars,
-  projectEnvVars,
   resolveAppEnvVars,
-  resolveEnvVarsForDeploy,
 } from "../../shared/env-crypto.ts";
 import { rollingRedeploy } from "../scale/index.ts";
 import { wakeApp } from "../scale/wake.ts";
@@ -84,7 +83,7 @@ function candidateApp(app: AppRow, candidate: DeployRequest | null): AppRow {
     image_ref: candidate.image_ref || "",
     container_port: candidate.container_port,
     environment_id: candidate.environment_id !== undefined ? candidate.environment_id : app.environment_id,
-    env_projection: candidate.env_projection == null ? null : JSON.stringify(candidate.env_projection),
+    env_vars: serializeRuntimeConfig(candidate),
     memory_mb: candidate.memory_mb ?? 0,
     cpu_limit: candidate.cpu_limit ?? 0,
     health_check: mode === "http" ? 1 : 0,
@@ -106,19 +105,11 @@ function candidateApp(app: AppRow, candidate: DeployRequest | null): AppRow {
 async function candidateEnvVars(app: AppRow, candidate: DeployRequest | null): Promise<Record<string, string>> {
   if (!candidate) return resolveAppEnvVars(app);
   const effectiveApp = candidateApp(app, candidate);
-  const environment = effectiveApp.environment_id ? db.getEnvironment(effectiveApp.environment_id) : null;
-  const values = await resolveEnvVarsForDeploy(environment?.env_vars);
-  if (candidate.env_vars) {
-    const incoming = Array.isArray(candidate.env_vars)
-      ? candidate.env_vars
-      : Object.entries(candidate.env_vars).map(([key, value]) => ({ key, value }));
-    for (const entry of incoming) values[entry.key] = entry.value;
-  }
+  const values = await resolveRuntimeEnv(effectiveApp);
   const bindings = resolveStorageBindings(candidate.storage, getAppStorage(app.id));
   await prepareStorageBindings(app, bindings);
-  const projected = projectEnvVars(values, candidate.env_projection);
   const platform = platformEnvVars(effectiveApp);
-  return { ...platform, ...projected, ...await appStorageEnv(app.id, bindings), OCD_DEPLOY_TARGET: platform.OCD_DEPLOY_TARGET };
+  return { ...platform, ...values, ...await appStorageEnv(app.id, bindings), OCD_DEPLOY_TARGET: platform.OCD_DEPLOY_TARGET };
 }
 
 const wakeIfSleeping: Step<RedeployInput, WakeOut> = {
@@ -536,6 +527,16 @@ const redeployOp: OpKindDefinition<RedeployInput> = {
   label: "Redeploy app",
   resourceKeys: (input) => [`app:${input.appId}`],
   steps: [
+    {
+      name: "preflight_runtime_environment",
+      label: "Validate runtime environment",
+      async run(ctx) {
+        const app = db.getApp(ctx.input.appId);
+        if (!app) throw new Error("App not found");
+        await resolveRuntimeEnv(candidateApp(app, effectiveCandidate(app, ctx.input)));
+        return { valid: true };
+      },
+    },
     wakeIfSleeping,
     snapshotCurrentRevision,
     setDeploying,

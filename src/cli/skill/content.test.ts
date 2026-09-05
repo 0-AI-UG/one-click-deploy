@@ -4,6 +4,7 @@ import {
   DeployManifestSchema,
   StackManifestSchema,
 } from "../../shared/manifest-schema.ts";
+import { buildStackAppSpec, validateStackReferences } from "../../shared/stack-spec.ts";
 import { renderSkillFiles } from "./content.ts";
 
 describe("embedded OCD skill", () => {
@@ -94,7 +95,7 @@ describe("embedded OCD skill", () => {
       expect(cli).toContain(`ocd ${command}`);
     }
     for (const flag of [
-      "--dry-run", "--config-only", "--auth-password-env", "--server", "--set",
+      "--dry-run", "--config-only", "--auth-password-env", "--server",
       "--tail", "--since", "--app",
     ]) {
       expect(cli).toContain(flag);
@@ -196,8 +197,11 @@ describe("embedded OCD skill", () => {
         for (const app of Object.values(stack.apps)) {
           expect(files[`${stackDir}/${app.manifest}`]).toBeDefined();
         }
-        expect(stack.apps.web?.env).toEqual(["API_URL", "NODE_ENV"]);
-        expect(stack.apps.web?.env).not.toContain("DATABASE_URL");
+        const specs = Object.entries(stack.apps).map(([key, entry]) => buildStackAppSpec(
+          key, entry, DeployManifestSchema.parse(JSON.parse(files[`${stackDir}/${entry.manifest}`])), "", "",
+        ));
+        expect(() => validateStackReferences(specs)).not.toThrow();
+        expect(specs.find((app) => app.key === "web")?.env).toEqual({ NODE_ENV: "production", API_URL: { from: "apps.api.outputs.URL" } });
       } else {
         DeployManifestSchema.parse(parsed);
       }

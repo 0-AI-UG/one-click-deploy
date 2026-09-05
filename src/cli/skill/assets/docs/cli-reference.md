@@ -6,7 +6,7 @@ and alias supported by that command.
 ## Build and delivery
 
 ```text
-ocd deploy [manifest] [--set=KEY=VALUE] [--auth-password-env=KEY]
+ocd deploy [manifest] [--auth-password-env=KEY]
     [--server=ID] [--dry-run] [--config-only] [--app=EXISTING_APP]
     [--commit=sha] [--allow-unknown]
 ocd deploy stack [manifest] [--only=web,worker] [--with-dependents]
@@ -84,7 +84,8 @@ ocd ops finalize <id> [--status=auto|done|failed]
 ## Environments and infrastructure
 
 ```text
-ocd envs <list|show|create|copy|rename|set|unset|deleted|restore|remove|purge>
+ocd envs <list|show|create|copy|rename|set|generate|unset|deleted|restore|remove|purge>
+ocd envs generate <environment> <KEY> [--type=password|username]
 ocd servers
 ocd servers show <name|id> [--storage]
 ocd servers diagnose <name|id>

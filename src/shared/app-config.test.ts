@@ -120,14 +120,34 @@ describe("desired app configuration", () => {
     expect(db.getEnvironment(env.id)).not.toBeNull();
   });
 
-  test("omitting environment_id retains the app environment", async () => {
+  test("runtime config remains app-local and literal values are redacted from diffs", async () => {
+    const {app,env} = seedApp();
+    const request = {app_name:app.name,image_ref:app.image_ref,container_port:3000,environment_id:env.id,env:{TOKEN:"private-literal"}};
+    const beforeEnvironment = db.getEnvironment(env.id)!.env_vars;
+    const beforeRevision = app.config_revision;
+    const changes = await applyAppConfig(app.id, request);
+    expect(JSON.stringify(changes)).not.toContain("private-literal");
+    expect(JSON.parse(db.getApp(app.id)!.env_vars).env.TOKEN).toBe("private-literal");
+    expect(db.getApp(app.id)!.config_revision).toBeGreaterThan(beforeRevision);
+    expect(db.getEnvironment(env.id)!.env_vars).toBe(beforeEnvironment);
+  });
+
+  test("missing runtime references fail before desired config or environment linkage changes", async () => {
+    const {app,env} = seedApp();
+    const before = db.getApp(app.id)!;
+    await expect(applyAppConfig(app.id, {app_name:app.name,image_ref:app.image_ref,container_port:4000,env:{TOKEN:{from:"environment.MISSING"}}})).rejects.toThrow("none is selected");
+    expect(db.getApp(app.id)).toEqual(before);
+    expect(db.getEnvironment(env.id)).not.toBeNull();
+  });
+
+  test("omitting environment_id detaches without deleting the environment", async () => {
     const { app, env } = seedApp();
     await applyAppConfig(app.id, {
       app_name: app.name,
       image_ref: app.image_ref,
       container_port: 3000,
     });
-    expect(db.getApp(app.id)?.environment_id).toBe(env.id);
+    expect(db.getApp(app.id)?.environment_id).toBeNull();
     expect(db.getEnvironment(env.id)).not.toBeNull();
   });
 
@@ -218,6 +238,7 @@ describe("desired app configuration", () => {
 
   test("editing a linked environment advances the desired-config revision", () => {
     const { app, env } = seedApp();
+    db.updateAppEnvVars(app.id, JSON.stringify({env:{API_URL:{from:"environment.API_URL"}},outputs:{}}));
     const before = db.getApp(app.id)!.config_revision;
 
     db.updateEnvironment(

@@ -62,7 +62,7 @@ function fixture() {
     domain: "",
     image_ref: OLD_DIGEST,
     container_port: 3000,
-    env_vars: "{}",
+    env_vars: JSON.stringify({ env: {}, outputs: {} }),
   });
   db.updateAppBuildConfig(app.id, {
     sourceId: source.id,
@@ -324,7 +324,7 @@ describe("webhook build source transport boundary", () => {
       domain: "",
       image_ref: OLD_DIGEST,
       container_port: 3000,
-      env_vars: "{}",
+      env_vars: JSON.stringify({ env: {}, outputs: {} }),
     });
     db.updateAppBuildConfig(buildMember.id, {
       sourceId: seeded.source.id,
@@ -342,7 +342,7 @@ describe("webhook build source transport boundary", () => {
       domain: "",
       image_ref: `docker.io/library/postgres@sha256:${"c".repeat(64)}`,
       container_port: 5432,
-      env_vars: "{}",
+      env_vars: JSON.stringify({ env: {}, outputs: {} }),
     });
     db.setAppStack(prebuilt.id, stack.id);
     db.updateAppStackManifestPath(prebuilt.id, "ocd-stack.json");

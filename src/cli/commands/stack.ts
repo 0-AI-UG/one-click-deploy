@@ -7,23 +7,14 @@ import { webConfirm, withWebConfirmation } from "../confirm.ts";
 import {
   manifestRepoLocation,
   readManifest,
-  promptRequired,
   resolveAuthPassword,
   manifestHash,
   localGitCommit,
 } from "../manifest.ts";
-import {
-  mergeEnv,
-  type AppEnvDefs,
-  type EnvDef,
-  type MergedEntry,
-  type RequiredMissing,
-} from "../../shared/env-merge.ts";
-import { buildStackAppSpec } from "../../shared/stack-spec.ts";
+import { buildStackAppSpec, validateStackReferences } from "../../shared/stack-spec.ts";
 import { validateStackManifest } from "../../shared/manifest-validate.ts";
 import type { StackManifest, StackDeployRequest } from "../../shared/rpc.ts";
 import { parseCliArgs, positiveIntegerFlag } from "../args.ts";
-import { readSetValuesFromStdin } from "../stdin-values.ts";
 import { operationLogQuery, parseLogArgs } from "../log-filters.ts";
 import { expectArray, expectRecord, expectStringField } from "../response.ts";
 import { ensureBuildReadiness } from "../deploy-readiness.ts";
@@ -40,7 +31,6 @@ interface StackListItem {
   environment_id?: number | null;
   /** The stack's shared staging environment, remembered across re-ups. */
   staging_environment_id?: number | null;
-  staging_env_keys?: string;
   last_operation_id?: number | null;
   last_operation_status?: string | null;
   last_operation_failed?: boolean;
@@ -102,20 +92,18 @@ function readStackManifest(path: string, options: { allowUnknown?: boolean } = {
 
 /**
  * Build a stack app element from its DeployManifest via the shared mapping
- * (src/shared/stack-spec.ts), then attach the CLI-collected env vars.
+ * (src/shared/stack-spec.ts).
  */
 function buildAppElement(
   key: string,
   entry: StackManifest["apps"][string],
   manifest: ReturnType<typeof readManifest>,
-  envVars: Array<{ key: string; value: string; secret?: boolean }>,
   manifestPath: string,
   manifestFullPath: string,
 ): AppElement {
   const el = buildStackAppSpec(key, entry, manifest, "", "");
   el.manifest_path = manifestPath;
   el.manifest_hash = manifestHash(manifestFullPath);
-  if (envVars.length > 0) el.env_vars = envVars;
   return el;
 }
 
@@ -155,17 +143,13 @@ references a .ocd-deploy.json (resolved relative to the stack manifest). Each
 member declares either a Git build or a prebuilt image. OCD resolves every
 runtime artifact to an exact immutable OCI digest.
 
-Env vars are collected per app from each app's manifest env[] section:
-defaults are sent as-is, --set overrides or adds values, and required vars
-without a value are prompted for (grouped per app).
+Each app's env map explicitly selects literals and environment or app output references:
+Missing references fail deployment. Manage stored values with ocd envs set.
 
 ${BOLD}Arguments:${RESET}
   [manifest]                 Path to stack manifest (default: ocd-stack.json)
 
 ${BOLD}Options:${RESET}
-  --set=<app>.KEY=VALUE      Set an env var for one app (repeatable)
-  --set=KEY=VALUE            Set an env var for all apps as a fallback
-  --staging-set=KEY=VALUE    Set a staging-only env var (repeatable)
   --only=web,worker          Reconcile only these app members
   --with-dependents          Include downstream app dependents of --only
   --changed                  Reconcile members whose manifest or image changed
@@ -283,68 +267,9 @@ async function findStackByName(name: string): Promise<StackListItem | undefined>
   return list.find((s) => s.name.toLowerCase() === lower);
 }
 
-async function findEnvironmentById(id: number): Promise<ResolvedEnv | undefined> {
-  const list = await get<ResolvedEnv[]>("/api/environments");
-  return list.find((e) => e.id === id);
-}
-
-/** Only keys previously written through stack staging_env may satisfy a
- * required declaration from an existing environment. A copied production key
- * with the same name is not evidence of staging configuration. */
-export function certifiedStagingExistingKeys(
-  env: ResolvedEnv | undefined,
-  encodedCertifiedKeys: string | undefined,
-): Set<string> {
-  let certified: string[] = [];
-  try {
-    const parsed = JSON.parse(encodedCertifiedKeys || "[]");
-    if (Array.isArray(parsed)) certified = parsed.map(String);
-  } catch { /* invalid legacy state certifies nothing */ }
-  const present = new Set((env?.env_vars || []).map((entry) => entry.key));
-  return new Set(certified.filter((key) => present.has(key)));
-}
-
-/** Staging declarations are desired overrides, not production-style defaults:
- * an explicit default (including the empty string) must replace a value copied
- * from production. A required value without a default is satisfied only by a
- * key previously certified as explicitly staging-owned. */
-export function mergeStagingEnv(
-  defs: EnvDef[],
-  overrides: Record<string, string>,
-  certifiedExistingKeys: Set<string>,
-): { entries: MergedEntry[]; requiredMissing: RequiredMissing[] } {
-  const byKey = new Map(defs.map((def) => [def.key, def]));
-  const keys = new Set([...byKey.keys(), ...Object.keys(overrides)]);
-  const entries: MergedEntry[] = [];
-  const requiredMissing: RequiredMissing[] = [];
-  for (const key of [...keys].sort()) {
-    const def = byKey.get(key);
-    const secret = def?.secret === true;
-    if (Object.hasOwn(overrides, key)) {
-      entries.push({ key, value: overrides[key], secret });
-    } else if (def?.default !== undefined) {
-      // Empty is meaningful here: it clears a copied production credential or
-      // side-effect URL in a checked-in, reviewable staging contract.
-      entries.push({ key, value: def.default, secret });
-    } else if (certifiedExistingKeys.has(key)) {
-      continue;
-    } else if (def?.required) {
-      requiredMissing.push({
-        key,
-        apps: ["staging"],
-        secret,
-        description: def.description,
-      });
-    }
-  }
-  return { entries, requiredMissing };
-}
-
 export async function stackUp(args: string[]): Promise<void> {
   const parsed = parseCliArgs(args, {
     help: { type: "boolean", aliases: ["h"] },
-    set: { type: "string", repeatable: true },
-    "staging-set": { type: "string", repeatable: true },
     only: { type: "string" },
     "with-dependents": { type: "boolean" },
     changed: { type: "boolean" },
@@ -352,16 +277,12 @@ export async function stackUp(args: string[]): Promise<void> {
     "config-only": { type: "boolean" },
     "allow-unknown": { type: "boolean" },
     commit: { type: "string" },
-    "sets-stdin": { type: "boolean" },
   }, { maxPositionals: 1 });
   if (parsed.flags.help === true) {
     upUsage();
     process.exit(0);
   }
   const manifestPath = parsed.positionals[0] || "ocd-stack.json";
-  const stdinSets = parsed.flags["sets-stdin"] === true ? await readSetValuesFromStdin() : { sets: [], stagingSets: [] };
-  const rawSets = [...((parsed.flags.set as string[] | undefined) ?? []), ...stdinSets.sets];
-  const rawStagingSets = [...((parsed.flags["staging-set"] as string[] | undefined) ?? []), ...stdinSets.stagingSets];
   const onlyRaw = (parsed.flags.only as string | undefined) ?? "";
   const withDependents = parsed.flags["with-dependents"] === true;
   const changedOnly = parsed.flags.changed === true;
@@ -388,44 +309,17 @@ export async function stackUp(args: string[]): Promise<void> {
   }
 
   const appKeys = new Set(Object.keys(manifest.apps));
-  // Parse --set into per-app (<app>.KEY) and global (KEY) buckets. A plain
-  // KEY is a fallback applied to any app that declares it; an <app>.KEY targets
-  // that one app.
-  const globalSets: Record<string, string> = {};
-  const appSets: Record<string, Record<string, string>> = {};
-  for (const pair of rawSets) {
-    const eq = pair.indexOf("=");
-    if (eq < 1) {
-      console.error(`${RED}Invalid --set value (expected --set=KEY=VALUE or --set=app.KEY=VALUE): ${pair}${RESET}`);
-      process.exit(1);
-    }
-    const lhs = pair.slice(0, eq);
-    const value = pair.slice(eq + 1);
-    const dot = lhs.indexOf(".");
-    if (dot > 0 && appKeys.has(lhs.slice(0, dot))) {
-      const ak = lhs.slice(0, dot);
-      const key = lhs.slice(dot + 1);
-      (appSets[ak] ||= {})[key] = value;
-    } else {
-      globalSets[lhs] = value;
-    }
-  }
-
   console.log(`${DIM}Stack:${RESET} ${stackLocation.path} ${BOLD}(${manifest.name})${RESET}`);
 
-  // Apps. Members share one environment, so env vars are merged across all
-  // apps (not collected per-app) into a single stack env.
+  // Resolve child manifests with their explicit runtime environment maps.
   const apps: AppElement[] = [];
-  const appEnvDefs: AppEnvDefs[] = [];
   for (const [key, entry] of Object.entries(manifest.apps)) {
     const appManifest = readManifest(resolve(baseDir, entry.manifest), { allowUnknown });
-    appEnvDefs.push({ app: key, defs: appManifest.env || [] });
     const childManifestPath = resolve(baseDir, entry.manifest);
     const appElement = buildAppElement(
       key,
       entry,
       appManifest,
-      [],
       entry.manifest,
       childManifestPath,
     );
@@ -435,97 +329,20 @@ export async function stackUp(args: string[]): Promise<void> {
     apps.push(appElement);
   }
 
-  // Resolve the target environment (reused or, if omitted, auto-created) so we
-  // know which keys already exist — existing values win over manifest defaults.
+  validateStackReferences(apps);
+  const dependencyApps = Object.fromEntries(apps.map((app) => [app.key, { ...manifest.apps[app.key], needs: app.needs }]));
   const existingStack = await findStackByName(manifest.name);
-  let reused = manifest.environment ? await resolveEnvironment(manifest.environment) : undefined;
-  let resumed = false;
-  // Resume: an already-created stack stays linked to its environment
-  // server-side, so when environment is omitted we seed existing keys from that env —
-  // otherwise a re-up re-prompts for (and re-requires) vars already stored.
-  if (!reused && existingStack?.environment_id != null) {
-    reused = await findEnvironmentById(existingStack.environment_id);
-    resumed = !!reused;
-  }
-  const existingKeys = new Set((reused?.env_vars || []).map((v) => v.key));
-
-  // --- staging environment -------------------------------------------------
-  // Staging is an independent environment contract. Releases into staging are
-  // initiated explicitly by CI or a user and can later be promoted by digest.
-  //
-  // Leave undefined when the field is absent — the deploy op then preserves the
-  // stack's stored staging env. Only an explicit null sends null.
-  let stagingEnvId: number | null | undefined;
-  let stagingEnvName: string | undefined;
-  let resolvedStagingEnv: ResolvedEnv | undefined;
-  if (manifest.staging_environment === null) {
-    stagingEnvId = null;
-  } else if (manifest.staging_environment !== undefined) {
-    const env = await resolveEnvironment(manifest.staging_environment);
-    stagingEnvId = env.id;
-    stagingEnvName = env.name;
-    resolvedStagingEnv = env;
-  } else if (existingStack?.staging_environment_id != null) {
-    resolvedStagingEnv = await findEnvironmentById(existingStack.staging_environment_id);
-  }
-
-  const stagingOverrides: Record<string, string> = {};
-  for (const pair of rawStagingSets) {
-    const eq = pair.indexOf("=");
-    if (eq < 1) {
-      console.error(`${RED}Invalid --staging-set value (expected --staging-set=KEY=VALUE): ${pair}${RESET}`);
-      process.exit(1);
-    }
-    stagingOverrides[pair.slice(0, eq)] = pair.slice(eq + 1);
-  }
-  const wantsStaging = manifest.staging_environment !== undefined ||
-    existingStack?.staging_environment_id != null ||
-    (manifest.staging_env?.length ?? 0) > 0 ||
-    rawStagingSets.length > 0;
-  let staging_env_vars: Array<{ key: string; value: string; secret?: boolean }> = [];
-  if (wantsStaging) {
-    const mergedStaging = mergeStagingEnv(
-      manifest.staging_env || [],
-      stagingOverrides,
-      certifiedStagingExistingKeys(resolvedStagingEnv, existingStack?.staging_env_keys),
-    );
-    const promptedStaging = await promptRequired(
-      mergedStaging.requiredMissing,
-      "Required environment variables (staging)",
-    );
-    staging_env_vars = [...mergedStaging.entries, ...promptedStaging];
-  }
-
-  // --set overrides target the shared env; app-scoped (`app.KEY`) and global
-  // (`KEY`) both resolve to one key here, app-scoped last so it wins.
-  const overrides: Record<string, string> = { ...globalSets };
-  for (const perApp of Object.values(appSets)) Object.assign(overrides, perApp);
-
-  const merged = mergeEnv(appEnvDefs, overrides, existingKeys);
-  if (merged.conflicts.length > 0) {
-    console.error(`\n${RED}Env var conflicts — apps disagree on a default and nothing resolves it:${RESET}`);
-    for (const c of merged.conflicts) {
-      console.error(`  ${BOLD}${c.key}${RESET}: ${c.apps.join(", ")} disagree — values: ${c.values.join(" | ")}`);
-    }
-    console.error(`Resolve with --set=${merged.conflicts[0].key}=VALUE or an existing environment.`);
-    process.exit(1);
-  }
-  const prompted = await promptRequired(merged.requiredMissing, "Required environment variables (stack)");
-  const env_vars = [...merged.entries, ...prompted];
+  const reused = manifest.environment ? await resolveEnvironment(manifest.environment) : undefined;
+  const stagingEnvironment = manifest.staging_environment
+    ? await resolveEnvironment(manifest.staging_environment) : undefined;
+  const stagingEnvId = stagingEnvironment?.id ?? null;
+  const stagingEnvName = stagingEnvironment?.name;
 
   const body: StackDeployRequest = {
     name: manifest.name,
     stack_manifest_path: stackLocation.path,
-    environment_id: reused?.id,
+    environment_id: reused?.id ?? null,
     staging_environment_id: stagingEnvId,
-    env_vars: env_vars.length > 0 ? env_vars : undefined,
-    staging_env_vars: staging_env_vars.length > 0 ? staging_env_vars : undefined,
-    staging_env_keys: [
-      ...new Set([
-        ...(manifest.staging_env || []).map((entry) => entry.key),
-        ...Object.keys(stagingOverrides),
-      ]),
-    ],
     apps,
   };
 
@@ -558,7 +375,7 @@ export async function stackUp(args: string[]): Promise<void> {
       console.error(`${RED}Unknown --only app member(s): ${unknown.join(", ")}${RESET}`);
       process.exit(1);
     }
-    if (withDependents) selectedKeys = expandAppDependents(selectedKeys, manifest.apps);
+    if (withDependents) selectedKeys = expandAppDependents(selectedKeys, dependencyApps);
     for (const key of selectedKeys) modes.set(key, "artifact");
     selectionReason = `explicit --only${withDependents ? " plus dependents" : ""}`;
   } else if (!forceAll && removedMemberKeys.length > 0) {
@@ -590,19 +407,9 @@ export async function stackUp(args: string[]): Promise<void> {
       }
     }
     const direct = new Set(selectedKeys);
-    selectedKeys = expandAppDependents(selectedKeys, manifest.apps);
+    selectedKeys = expandAppDependents(selectedKeys, dependencyApps);
     for (const key of selectedKeys) {
       if (!direct.has(key)) modes.set(key, "runtime");
-    }
-    if (rawSets.length > 0) {
-      selectedKeys = expandAppDependents(allKeys, manifest.apps);
-      for (const key of selectedKeys) modes.set(key, "runtime");
-    }
-    if (rawStagingSets.length > 0) {
-      for (const app of apps) {
-        selectedKeys.add(app.key);
-        modes.set(app.key, "control");
-      }
     }
     selectionReason = "changed manifests or immutable images plus dependents";
   }
@@ -695,7 +502,7 @@ export async function stackUp(args: string[]): Promise<void> {
   );
   if (reused) {
     console.log(
-      `${DIM}Env:${RESET}   reusing ${resumed ? "linked" : ""} environment ${reused.name}`.replace("  ", " "),
+      `${DIM}Env:${RESET}   reusing environment ${reused.name}`.replace("  ", " "),
     );
   }
   if (stagingEnvName) console.log(`${DIM}Staging:${RESET} ${stagingEnvName}`);

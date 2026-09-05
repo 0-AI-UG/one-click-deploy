@@ -214,7 +214,7 @@ describe("validateDeployRequest", () => {
     app_name: "my-app",
     image_ref: `ghcr.io/acme/my-app@sha256:${"a".repeat(64)}`,
     container_port: 3000,
-    env_vars: { NODE_ENV: "production" },
+    env: { NODE_ENV: "production" },
   };
 
   test("accepts valid request", () => {
@@ -242,7 +242,7 @@ describe("validateDeployRequest", () => {
   });
 
   test("rejects invalid env vars", () => {
-    expect(validateDeployRequest({ ...validRequest, env_vars: { PATH: "/bin" } }).valid).toBe(false);
+    expect(validateDeployRequest({ ...validRequest, env: { KEY: { from: "invalid.KEY" } } }).valid).toBe(false);
   });
 
   test("rejects invalid domain", () => {
@@ -519,7 +519,7 @@ describe("validateDeployManifest", () => {
       name: "app",
       description: "desc",
       container_port: 3000,
-      env: [{ key: "DATABASE_URL", required: true }, { key: "API_KEY", secret: true, default: "" }],
+      env: { DATABASE_URL: { from: "environment.DATABASE_URL" }, API_KEY: { from: "environment.API_KEY" } },
       volume: { size: 5, path: "/data" },
       replicas: 3,
     });

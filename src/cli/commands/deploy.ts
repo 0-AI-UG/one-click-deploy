@@ -4,15 +4,12 @@ import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
 import {
   manifestRepoLocation,
   readManifest,
-  promptRequired,
   resolveAuthPassword,
   manifestHash,
   localGitCommit,
 } from "../manifest.ts";
-import { mergeEnv } from "../../shared/env-merge.ts";
 import { withWebConfirmation } from "../confirm.ts";
 import { parseCliArgs, positiveIntegerFlag } from "../args.ts";
-import { readSetValuesFromStdin } from "../stdin-values.ts";
 import { ensureBuildReadiness } from "../deploy-readiness.ts";
 
 interface Environment {
@@ -37,7 +34,6 @@ async function parseFlags(args: string[]): Promise<{
   authPasswordEnv?: string;
   serverId?: number;
   appName?: string;
-  sets: Record<string, string>;
   help: boolean;
   dryRun: boolean;
   configOnly: boolean;
@@ -45,7 +41,6 @@ async function parseFlags(args: string[]): Promise<{
   commit?: string;
 }> {
   const parsed = parseCliArgs(args, {
-    set: { type: "string", repeatable: true },
     "auth-password-env": { type: "string" },
     server: { type: "string" },
     app: { type: "string" },
@@ -54,7 +49,6 @@ async function parseFlags(args: string[]): Promise<{
     "config-only": { type: "boolean" },
     "allow-unknown": { type: "boolean" },
     commit: { type: "string" },
-    "sets-stdin": { type: "boolean" },
   }, { maxPositionals: 1 });
   const manifestPath = parsed.positionals[0] || ".ocd-deploy.json";
   const authPasswordEnv = parsed.flags["auth-password-env"] as string | undefined;
@@ -64,17 +58,8 @@ async function parseFlags(args: string[]): Promise<{
   if (commit !== undefined && !/^[a-f0-9]{7,64}$/i.test(commit)) {
     throw new Error("--commit must contain 7-64 hexadecimal characters");
   }
-  const stdinSets = parsed.flags["sets-stdin"] === true ? (await readSetValuesFromStdin()).sets : [];
-  const sets: Record<string, string> = {};
-  for (const pair of [...((parsed.flags.set as string[] | undefined) ?? []), ...stdinSets]) {
-      const eq = pair.indexOf("=");
-      if (eq < 1) {
-        throw new Error(`Invalid --set value (expected KEY=VALUE): ${pair}`);
-      }
-      sets[pair.slice(0, eq)] = pair.slice(eq + 1);
-  }
   return {
-    manifestPath, authPasswordEnv, serverId, appName, sets, commit,
+    manifestPath, authPasswordEnv, serverId, appName, commit,
     help: parsed.flags.help === true,
     dryRun: parsed.flags["dry-run"] === true,
     configOnly: parsed.flags["config-only"] === true,
@@ -89,7 +74,7 @@ export async function deploy(args: string[]): Promise<void> {
     return;
   }
 
-  const { manifestPath, authPasswordEnv, serverId, appName, sets, help, dryRun, configOnly, allowUnknown, commit } = await parseFlags(args);
+  const { manifestPath, authPasswordEnv, serverId, appName, help, dryRun, configOnly, allowUnknown, commit } = await parseFlags(args);
 
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]
@@ -98,11 +83,9 @@ Deploys the manifest's declared source. OCD either builds the current Git
 commit and pushes it to build.image_repository, or resolves a prebuilt image
 reference. The runtime always receives an immutable registry digest.
 
-Env vars from the manifest's env[] section are included automatically:
-defaults are sent as-is, --set overrides or adds values, and required
-vars without a value are prompted for (hidden input when secret).
-The manifest's environment field links an environment by name. Use null to
-detach; omission retains an existing app's link.
+The manifest env map defines exactly which runtime variables are injected.
+References read existing values; manage those separately with ocd envs set.
+Omitting environment detaches the app's environment.
 
 ${BOLD}Arguments:${RESET}
   [manifest]                 Path to manifest (default: .ocd-deploy.json)
@@ -117,9 +100,7 @@ ${BOLD}Options:${RESET}
   --server=<id>              Pin this one deploy to a server ID. This is an
                              operational override; use placement_pool in a
                              committed manifest for portable scheduling intent.
-  --app=<name>               Apply to an explicit existing app while retaining
-                             its stored environment and stack association.
-  --set=KEY=VALUE            Set an env var (repeatable)
+  --app=<name>               Apply to an explicit existing app.
   --commit=<sha>             Record the source revision as deployment provenance
   --dry-run                  Show the desired-configuration diff without applying or deploying
   --config-only              Apply config; runtime changes reuse the current image
@@ -161,10 +142,10 @@ ${BOLD}Options:${RESET}
     image_ref: manifest.image,
     build: manifest.build,
     git_commit: sourceCommit,
-    env_projection: manifest.env_projection ?? null,
+    env: manifest.env ?? {},
+    outputs: manifest.outputs ?? {},
     storage: manifest.storage,
-    environment_id: environment?.id ??
-      (manifest.environment === null ? null : undefined),
+    environment_id: environment?.id ?? null,
     auth_password: authPassword ?? "",
     public: manifest.public ?? true,
     memory_mb: manifest.memory_mb ?? 0,
@@ -205,26 +186,10 @@ ${BOLD}Options:${RESET}
     manifest_path: location.path,
     manifest_hash: manifestHash(location.fullPath),
     ...(serverId !== undefined ? { server_id: serverId } : {}),
-    env_vars: [] as Array<{ key: string; value: string; secret?: boolean }>,
   };
 
   const existingApps = await get<Array<{ id: number; name: string; environment_id?: number | null; config_revision?: number }>>("/api/apps");
   const existingApp = existingApps.find((a) => a.name === body.app_name);
-  let valueEnvironment = environment;
-  if (manifest.environment === undefined && existingApp?.environment_id != null) {
-    const environments = await get<Environment[]>("/api/environments");
-    valueEnvironment = environments.find((candidate) =>
-      candidate.id === existingApp.environment_id
-    ) ?? null;
-  }
-  const existingKeys = new Set(
-    (valueEnvironment?.env_vars || []).map((value) => value.key),
-  );
-
-  const merged = mergeEnv([{ app: body.app_name, defs: manifest.env || [] }], sets, existingKeys);
-  const entries = [...merged.entries, ...(await promptRequired(merged.requiredMissing))];
-  body.env_vars = entries;
-
   if (dryRun) {
     const existing = existingApp;
     if (!existing) {

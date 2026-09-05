@@ -1,3 +1,4 @@
+import { generateEnvironmentValue } from "../../shared/environment-generate.ts";
 import { appStorageView } from "../../shared/object-storage.ts";
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission, requireAuthenticated, envScope } from "../lib/permissions.ts";
@@ -121,7 +122,7 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
       changedKeys = [...new Set([...before.keys(), ...after.keys()])]
         .filter((key) => before.get(key) !== after.get(key));
     }
-    const attachedApps = db.getAppsByEnvironmentId(id);
+    const attachedApps = db.getAppsAffectedByEnvironment(id);
     if (body.app_ids !== undefined && !Array.isArray(body.app_ids)) {
       return Response.json(
         { ok: false, error: "app_ids must be an array" },
@@ -131,19 +132,14 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
     const requestedIds = body.app_ids === undefined ? null : new Set(body.app_ids.map(Number));
     if (requestedIds && [...requestedIds].some((appId) => !attachedApps.some((app) => app.id === appId))) {
       return Response.json(
-        { ok: false, error: "app_ids may only contain apps linked to this environment" },
+        { ok: false, error: "app_ids may only contain apps referencing this environment" },
         { status: 400, headers: corsHeaders },
       );
     }
     const envVarsChanged = newSerialized !== existing.env_vars;
-    // Calculate the impact before mutating desired state. A null projection is
-    // the legacy "all keys" behavior; explicit projections prevent unrelated
-    // stack members from becoming stale.
-    const staleAppRows = envVarsChanged ? attachedApps
-      .filter((app) => {
-        const projection = db.parseAppEnvProjection(app);
-        return projection === null || projection.some((key) => changedKeys.includes(key));
-      }) : [];
+    const staleAppRows = envVarsChanged
+      ? db.getAppsAffectedByEnvironment(id, changedKeys)
+      : [];
     const affectedApps = staleAppRows.filter((app) => !requestedIds || requestedIds.has(app.id));
     const appSummary = (app: typeof attachedApps[number]) => ({ id: app.id, name: app.name });
 
@@ -302,9 +298,9 @@ export async function handleGetEnvironmentApps(request: Request, id: number): Pr
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
-    const apps = await Promise.all(db.getAppsByEnvironmentId(id).map(async (a) => {
+    const apps = await Promise.all(db.getAppsAffectedByEnvironment(id).map(async (a) => {
       const resolved = await resolveAppEnvVars(a);
-      const secretKeys = new Set(parseEnvVars(env.env_vars).entries.filter((entry) => entry.secret).map((entry) => entry.key));
+      const secretKeys = new Set(Object.keys(JSON.parse(a.env_vars || "{}").env || {}));
       return {
         id: a.id, name: a.name, status: a.status, domain: a.domain,
         storage_bindings: appStorageView(a.id),
@@ -320,6 +316,20 @@ export async function handleGetEnvironmentApps(request: Request, id: number): Pr
       };
     }));
     return Response.json(apps, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleGenerateEnvironmentValue(request: Request, id: number): Promise<Response> {
+  try {
+    await requirePermission(request, "environments.secrets", envScope(id));
+    const { key, type = "password" } = await request.json();
+    if (typeof key !== "string" || !/^[A-Z_][A-Z0-9_]*$/.test(key) || !["password", "username"].includes(type)) {
+      return Response.json({ error: "Provide an environment key and type password or username" }, { status: 400, headers: corsHeaders });
+    }
+    const created = await generateEnvironmentValue(id, key, type);
+    return Response.json({ ok: true, key, created }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

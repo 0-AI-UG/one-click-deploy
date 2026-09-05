@@ -6,7 +6,7 @@ and alias supported by that command.
 ## Build and delivery
 
 ```text
-ocd deploy [manifest] [--set=KEY=VALUE] [--auth-password-env=KEY]
+ocd deploy [manifest] [--auth-password-env=KEY]
     [--server=ID] [--dry-run] [--config-only] [--app=EXISTING_APP]
     [--commit=sha] [--allow-unknown]
 ocd deploy stack [manifest] [--only=web,worker] [--with-dependents]
@@ -84,13 +84,14 @@ ocd ops finalize <id> [--status=auto|done|failed]
 ## Environments and infrastructure
 
 ```text
-ocd envs <list|show|create|copy|rename|set|unset|deleted|restore|remove|purge>
+ocd envs <list|show|create|copy|rename|set|generate|unset|deleted|restore|remove|purge>
+ocd envs generate <environment> <KEY> [--type=password|username]
 ocd servers
-ocd servers show <name|id>
+ocd servers show <name|id> [--storage]
 ocd servers diagnose <name|id>
 ocd servers create --type=X --location=X
 ocd servers enrollment-key
-ocd servers connect --name=X --address=X --private-address=X --host-key='...'
+ocd servers connect --name=X --address=X --routing-address=X --host-key='...'
 ocd servers delete <name|id>
 ocd servers refresh
 ocd servers pool <name|id> <pool>
@@ -100,8 +101,29 @@ ocd delete <app>
 ocd delete stack <name>
 ocd resources <ls|volume|volumes|delete>
 ocd volumes <list|show|audit|ls|cat|delete>
+ocd buckets <list|create|delete> [--storage=<connection>]
+ocd storage list
+ocd storage grant <app> <bucket> --prefix=path/ --token-file=/private/path
+    [--storage=<connection>] [--methods=GET,HEAD,PUT,DELETE,LIST]
+ocd storage revoke <grant-id>
 ocd ssh
+ocd cp <app|server>:/absolute/path <local-path> [--force] [--server] [--replica=ID]
 ```
+
+`ocd cp` streams one regular file from an app container or server to the local
+machine. It writes through a temporary file, verifies the received byte count,
+and refuses to replace an existing destination unless `--force` is supplied.
+Remote-to-local copies only are supported.
 
 DNS has no mutation command. The panel displays records for the operator to
 create at any DNS provider.
+
+Buckets use a separately configured S3 access key, secret key, signing region,
+and HTTPS endpoint. Bucket creation and deletion require browser approval;
+deletion refuses non-empty buckets and never recursively removes objects.
+
+`ocd volumes` lists provider disks; local directories appear in
+`ocd servers show <name|id> --storage` and `ocd app show <app> --storage`.
+Prefer manifest `storage` bindings for app-owned object access. Manual grant
+commands are administrative and write a new mode-0600 token file without
+printing the token. See [Environments and secrets](environments-and-secrets.md).

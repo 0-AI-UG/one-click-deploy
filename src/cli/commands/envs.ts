@@ -27,7 +27,7 @@ type EnvironmentImpact = {
 
 function printImpact(impact: EnvironmentImpact): void {
   if (impact.changed_keys.length === 0) {
-    console.log(`${DIM}No projected environment values will change.${RESET}`);
+    console.log(`${DIM}No referenced environment values will change.${RESET}`);
     return;
   }
   const names = impact.stale_apps.map((app) => `${app.name} (#${app.id})`);
@@ -472,6 +472,21 @@ export async function envs(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "generate") {
+    if (!args[1] || !args[2]) throw new Error("Usage: ocd envs generate <environment> KEY [--type=password|username]");
+    let type = "password";
+    for (let i = 3; i < args.length; i++) {
+      if (args[i].startsWith("--type=")) type = args[i].slice(7);
+      else if (args[i] === "--type") type = args[++i] || "";
+      else throw new Error(`Unknown option: ${args[i]}`);
+    }
+    if (!["password", "username"].includes(type)) throw new Error("type must be password or username");
+    const env = await resolveEnv(args[1]);
+    const result = await post<{ created: boolean }>(`/api/environments/${env.id}/generate`, { key: args[2], type });
+    console.log(`${result.created ? "Created" : "Kept existing"} ${args[2]} in ${env.name}. Values are applied on the next deploy.`);
+    return;
+  }
+
   if (sub === "copy" || sub === "duplicate") {
     if (!args[1] || !args[2]) {
       console.error("Usage: ocd envs copy <name|id> <new-name>");
@@ -591,6 +606,7 @@ ${BOLD}Commands:${RESET}
   copy <name|id> <new-name>  Duplicate an environment (secrets included)
   rename <name|id> <new-name> Rename an environment without changing variables
   set <name|id> [vars...]    Merge variables into env
+  generate <name|id> KEY    Create a password or username only if absent
   unset <name|id> KEY...     Remove variables from env
   deleted                    List recoverable deleted environments
   restore <name|id>          Restore a deleted environment
@@ -605,7 +621,7 @@ ${BOLD}Variable format:${RESET}
   --from-env KEY[=ENV_NAME]  Read a secret from the local process environment
   --from-dotenv PATH         Import dotenv entries as secrets
   --replace                  With set: replace all vars instead of merging
-  --rollout=MODE             redeploy (default), restart (no build), or none
+  --rollout=MODE             redeploy (default; no build), restart, or none
   --app=<name|id>            Limit rollout to a linked app (repeatable)
   --restart                  Alias for --rollout=restart
   --no-rollout               Alias for --rollout=none

@@ -14,14 +14,17 @@ trigger integration; GitHub Actions is not part of app delivery.
 
 - Inspect before mutating live resources.
 - Use `ocd deploy --dry-run` before material configuration changes.
-- Keep plaintext secrets out of manifests and logs. Use environments, `--set`,
+- Keep plaintext secrets out of manifests and logs. Use explicit environment references,
   `--auth-password-env`, and panel Settings.
 - Every runtime rollout still uses `repository@sha256:<digest>`. Mutable build
   tags are temporary transport only and never become desired runtime state.
 - Webhook delivery checks out the exact pushed commit and reconciles the
   committed manifest or stack. Do not substitute `ocd release` when manifest,
-  environment projection, or stack configuration may have changed.
-- Before panel upgrades, back up the database and verify current image digests.
+  runtime environment mapping, or stack configuration may have changed.
+- Before panel upgrades, back up the database, verify current image digests,
+  and ensure the release commit contains the features running in production.
+- For persistent data, inspect the actual driver and mount; a local directory
+  is not a separately billed provider disk or an enforced size reservation.
 - Do not delete, purge, rollback, migrate, promote, or recover resources
   without explicit user intent.
 
@@ -45,7 +48,7 @@ matching registry connection.
 
 A signed GitHub push webhook repeats that flow from the pushed SHA. For stacks,
 OCD reads the committed stack and child manifests and deploys dependency levels.
-This keeps environment projections and configuration synchronized with code.
+This keeps runtime environment mappings and configuration synchronized with code.
 
 `ocd release --image repository@sha256:digest` remains an advanced artifact-only
 escape hatch. It changes the image while preserving stored configuration; it
@@ -85,7 +88,7 @@ OCD without GitHub Actions minutes.
 ## Command map
 
 ```text
-ocd deploy [manifest] [--set=KEY=VALUE] [--auth-password-env=KEY]
+ocd deploy [manifest] [--auth-password-env=KEY]
     [--commit=sha] [--server=ID] [--app=EXISTING_APP]
     [--dry-run] [--config-only]
 ocd deploy stack [manifest] [--config-only] [--commit=sha]
@@ -118,10 +121,13 @@ ocd ops [--app=<app>]
 ocd ops logs <id> [--tail N] [--since TIME|CURSOR] [--child NAME|ID]
     [--phase STEP] [--follow]
 ocd servers
+ocd servers show <name|id> [--storage]
 ocd servers enrollment-key
-ocd servers connect --name=X --address=X --private-address=X --host-key='...'
+ocd servers connect --name=X --address=X --routing-address=X --host-key='...'
 ocd resources
 ocd volumes
+ocd buckets <list|create|delete> [--storage=<connection>]
+ocd storage <list|grant|revoke>
 ocd ssh
 ```
 
@@ -139,7 +145,7 @@ ocd ssh
 - [Networking and ingress](docs/networking-and-ingress.md)
 - [Infrastructure and server enrollment](docs/infrastructure-and-enrollment.md)
 - [Scaling, storage, and placement](docs/scaling-storage-and-placement.md)
-- [Operations and recovery](docs/operations-and-recovery.md)
+- [Operations, database recovery, and panel backups](docs/operations-and-recovery.md)
 - [Security and deletion](docs/security-and-deletion.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Reference index](reference.md)

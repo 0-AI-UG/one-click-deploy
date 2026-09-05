@@ -9,12 +9,8 @@ import {
   markOperationFinished,
 } from "../../shared/db/operations.ts";
 import deployStackOp, {
-  dependencyProjectionKeys,
-  injectAppUrl,
-  injectAppExports,
-  leastPrivilegeProjection,
-  suspiciousUnrelatedProjectionKeys,
   stackAppAlreadyConverged,
+  stackMemberEnvironmentId,
   topoLevels,
   portCapacityExceeded,
 } from "./deploy-stack.ts";
@@ -48,8 +44,8 @@ const preflightAppsStep = deployStackOp.steps.find((s) => s.name === "preflight_
 const validatePlanStep = deployStackOp.steps.find((s) => s.name === "validate_plan")!;
 const reconcileRemovalsStep = deployStackOp.steps.find((s) => s.name === "reconcile_removals")!;
 
-function app(key: string, needs?: string[], exports?: Record<string, { value: string; secret?: boolean }>) {
-  return { key, needs, exports, app_name: key, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", container_port: 3000 };
+function app(key: string, needs?: string[], outputs?: Record<string, { template: string; secret?: boolean }>) {
+  return { key, needs, outputs, app_name: key, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", container_port: 3000 };
 }
 
 function req(name: string, apps: ReturnType<typeof app>[]): StackDeployRequest {
@@ -91,134 +87,6 @@ describe("topoLevels", () => {
     expect(() => topoLevels([app("a", ["b"]), app("b", ["a"])])).toThrow(/cycle/i);
   });
 });
-describe("least-privilege stack environment projection", () => {
-  test("includes declared variables and generated dependency variables", () => {
-    const input = req("safe", [
-      app("web", ["api", "database"]),
-      app("api"),
-      app("database", undefined, {
-        HOST: { value: "{app.host}" },
-        PORT: { value: "{app.port}" },
-        USER: { value: "postgres" },
-        PASSWORD: { value: "{env.POSTGRES_PASSWORD}", secret: true },
-        NAME: { value: "app" },
-      }),
-    ]);
-    const web = {
-      ...input.apps[0],
-      declared_env_keys: ["NODE_ENV", "STRIPE_API_KEY"],
-      env_projection_mode: "declared" as const,
-    };
-    expect(dependencyProjectionKeys(web, input)).toEqual([
-      "API_URL",
-      "DATABASE_URL",
-      "DATABASE_HOST",
-      "DATABASE_PORT",
-      "DATABASE_USER",
-      "DATABASE_PASSWORD",
-      "DATABASE_NAME",
-    ]);
-    expect(leastPrivilegeProjection(web, input)).toEqual([
-      "API_URL",
-      "DATABASE_HOST",
-      "DATABASE_NAME",
-      "DATABASE_PASSWORD",
-      "DATABASE_PORT",
-      "DATABASE_URL",
-      "DATABASE_USER",
-      "NODE_ENV",
-      "STRIPE_API_KEY",
-    ]);
-  });
-
-  test("warn candidates contain names only and exclude declared/dependency secrets", () => {
-    expect(suspiciousUnrelatedProjectionKeys(
-      [
-        "DATABASE_PASSWORD",
-        "STRIPE_API_KEY",
-        "AWS_SECRET_ACCESS_KEY",
-        "MONGO_URL",
-        "DOCS_THEME",
-        "EMAIL_TOKEN",
-      ],
-      ["DATABASE_PASSWORD", "DOCS_THEME"],
-      null,
-    )).toEqual([
-      "AWS_SECRET_ACCESS_KEY",
-      "EMAIL_TOKEN",
-      "MONGO_URL",
-      "STRIPE_API_KEY",
-    ]);
-    expect(suspiciousUnrelatedProjectionKeys(
-      ["STRIPE_API_KEY", "EMAIL_TOKEN"],
-      [],
-      ["EMAIL_TOKEN"],
-    )).toEqual(["EMAIL_TOKEN"]);
-  });
-
-  test("includes every declared app dependency export", () => {
-    const input = req("safe", [app("web", ["database"]), app("database", undefined, {
-      HOST: { value: "{app.host}" },
-      PASSWORD: { value: "{env.POSTGRES_PASSWORD}", secret: true },
-    })]);
-    expect(dependencyProjectionKeys(input.apps[0], input)).toEqual([
-      "DATABASE_URL",
-      "DATABASE_HOST",
-      "DATABASE_PASSWORD",
-    ]);
-  });
-});
-
-describe("generated stack URLs", () => {
-  test("does not bump linked app revisions when the generated URL is unchanged", () => {
-    const environment = db.insertEnvironment(`url-env-${randomSuffix()}`, "");
-    const linked = db.insertApp({
-      name: `url-app-${randomSuffix()}`,
-      domain: "",
-      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      container_port: 3000,
-      env_vars: "{}",
-    });
-    db.updateAppEnvironment(linked.id, environment.id);
-
-    injectAppUrl(environment.id, "api", db.getApp(linked.id)!);
-    const afterFirstWrite = db.getApp(linked.id)!.config_revision;
-    const serialized = db.getEnvironment(environment.id)!.env_vars;
-
-    injectAppUrl(environment.id, "api", db.getApp(linked.id)!);
-
-    expect(db.getEnvironment(environment.id)!.env_vars).toBe(serialized);
-    expect(db.getApp(linked.id)!.config_revision).toBe(afterFirstWrite);
-  });
-
-  test("renders app and environment templates without rotating unchanged secrets", async () => {
-    const environment = db.insertEnvironment(`exports-env-${randomSuffix()}`, JSON.stringify({
-      version: 2,
-      entries: [{ key: "POSTGRES_PASSWORD", value: "secret", secret: false }],
-    }));
-    const database = db.insertApp({
-      name: `database-${randomSuffix()}`,
-      domain: "",
-      image_ref: `docker.io/library/postgres@sha256:${"a".repeat(64)}`,
-      container_port: 5432,
-      env_vars: "{}",
-    });
-    const definitions = {
-      HOST: { value: "{app.host}" },
-      PORT: { value: "{app.port}" },
-      PASSWORD: { value: "{env.POSTGRES_PASSWORD}", secret: true },
-    };
-    await injectAppExports(environment.id, "database", database, definitions);
-    const first = db.getEnvironment(environment.id)!.env_vars;
-    const resolved = await resolveEnvVarsForDeploy(first);
-    expect(resolved.DATABASE_HOST).toBe(`${database.name}.ocd.internal`);
-    expect(resolved.DATABASE_PORT).toBe("5432");
-    expect(resolved.DATABASE_PASSWORD).toBe("secret");
-    await injectAppExports(environment.id, "database", database, definitions);
-    expect(db.getEnvironment(environment.id)!.env_vars).toBe(first);
-  });
-});
-
 describe("portCapacityExceeded", () => {
   test("false when the new apps fit under the cap", () => {
     expect(portCapacityExceeded(198, 2, 200)).toBe(false);
@@ -244,7 +112,7 @@ describe("stack member convergence checkpoints", () => {
       domain: "",
       image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
-      env_vars: "{}",
+      env_vars: JSON.stringify({ env: {}, outputs: {} }),
     });
     db.updateAppStatus(insertedApp.id, "running");
     db.updateAppArtifactAndHealth(insertedApp.id, {
@@ -309,27 +177,27 @@ describe("deploy_stack plan step", () => {
     await expect(planStep.run(ctx, {})).rejects.toThrow(/unknown key/i);
   });
 
-  test("creates the stack + its environment and returns topo levels", async () => {
+  test("creates a stack without an implicit environment and returns topo levels", async () => {
     const name = `s-${randomSuffix()}`;
     const ctx = makeCtx(req(name, [app("web", ["api"]), app("api")]));
     const out = (await planStep.run(ctx, {})) as {
-      stackId: number; environmentId: number; levels: string[][]; createdStack: boolean;
+      stackId: number; environmentId: number | null; levels: string[][];
     };
-    expect(out.createdStack).toBe(true);
+
     expect(out.levels).toEqual([["api"], ["web"]]);
     const stack = db.getStackByName(name);
     expect(stack).not.toBeNull();
     expect(stack!.environment_id).toBe(out.environmentId);
-    expect(db.getEnvironment(out.environmentId)).not.toBeNull();
+    expect(out.environmentId).toBeNull();
   });
 
   test("is idempotent on resume: a second plan reuses the existing stack", async () => {
     const name = `s-${randomSuffix()}`;
     const ctx = makeCtx(req(name, [app("web")]));
-    const first = (await planStep.run(ctx, {})) as { stackId: number; createdStack: boolean };
-    expect(first.createdStack).toBe(true);
-    const second = (await planStep.run(ctx, {})) as { stackId: number; createdStack: boolean };
-    expect(second.createdStack).toBe(false);
+    const first = (await planStep.run(ctx, {})) as { stackId: number };
+
+    const second = (await planStep.run(ctx, {})) as { stackId: number };
+
     expect(second.stackId).toBe(first.stackId);
   });
 
@@ -339,42 +207,12 @@ describe("deploy_stack plan step", () => {
     const input = { ...req(name, [app("web")]), environment_id: existing.id };
     const ctx = makeCtx(input);
     const out = (await planStep.run(ctx, {})) as {
-      environmentId: number; createdStack: boolean; createdEnv: boolean;
+      environmentId: number;
     };
     expect(out.environmentId).toBe(existing.id);
-    expect(out.createdStack).toBe(true);
-    expect(out.createdEnv).toBe(false);
+
+
     expect(db.getStackByName(name)!.environment_id).toBe(existing.id);
-  });
-
-  test("writes the merged stack env_vars into the shared environment", async () => {
-    const name = `s-${randomSuffix()}`;
-    const input = {
-      ...req(name, [app("web")]),
-      env_vars: [{ key: "SHARED", value: "v1", secret: false }],
-    } as StackDeployRequest;
-    const out = (await planStep.run(makeCtx(input), {})) as { environmentId: number };
-    const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
-    const flat = await resolveEnvVarsForDeploy(db.getEnvironment(out.environmentId)!.env_vars);
-    expect(flat.SHARED).toBe("v1");
-  });
-
-  test("stack env_vars overlay a reused environment without dropping its other keys", async () => {
-    const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
-    const existing = db.insertEnvironment(
-      `shared-${randomSuffix()}`,
-      serializeEnvVars([{ key: "KEEP", value: "orig", secret: false, updated_at: "t" }]),
-    );
-    const name = `s-${randomSuffix()}`;
-    const input = {
-      ...req(name, [app("web")]),
-      environment_id: existing.id,
-      env_vars: [{ key: "ADDED", value: "new", secret: false }],
-    } as StackDeployRequest;
-    await planStep.run(makeCtx(input), {});
-    const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
-    const flat = await resolveEnvVarsForDeploy(db.getEnvironment(existing.id)!.env_vars);
-    expect(flat).toEqual({ KEEP: "orig", ADDED: "new" });
   });
 
   test("rejects a reuse of a non-existent environment", async () => {
@@ -395,7 +233,7 @@ describe("deploy_stack plan step", () => {
     const freshInput = req(`s-${randomSuffix()}`, [app("web")]);
     const freshOut = (await planStep.run(makeCtx(freshInput), {})) as any;
     await planStep.compensate!(makeCtx(freshInput), freshOut, {});
-    expect(db.getEnvironment(freshOut.environmentId)).not.toBeNull();
+    expect(freshOut.environmentId).toBeNull();
     expect(db.getStackByName(freshInput.name)?.status).toBe("failed");
   });
 });
@@ -438,14 +276,14 @@ describe("deploy_stack compensation retains already-deployed members", () => {
   test("plan.compensate retains member A when B fails inside deploy_apps", async () => {
     const { name, ctx, opId } = seedPartialFailure();
     const planOut = (await planStep.run(ctx, {})) as {
-      stackId: number; environmentId: number; createdStack: boolean;
+      stackId: number; environmentId: number;
     };
 
     const aName = `${name}-postgres`;
     const appA = db.insertApp({
       name: aName, domain: `${aName}.example.com`, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       environment_id: planOut.environmentId,
-      container_port: 3000, env_vars: "{}",
+      container_port: 3000, env_vars: JSON.stringify({ env: {}, outputs: {} }),
     });
     db.setAppStack(appA.id, planOut.stackId);
     enqueueOperation({
@@ -467,7 +305,7 @@ describe("deploy_stack compensation retains already-deployed members", () => {
     expect(destroys.length).toBe(0);
     expect(db.getApp(appA.id)).not.toBeNull();
     expect(db.getStackByName(name)?.status).toBe("failed");
-    expect(db.getEnvironment(planOut.environmentId)).not.toBeNull();
+    expect(planOut.environmentId).toBeNull();
   });
 
   test("repeated compensation preserves the same successful checkpoint", async () => {
@@ -478,7 +316,7 @@ describe("deploy_stack compensation retains already-deployed members", () => {
     const appA = db.insertApp({
       name: aName, domain: `${aName}.example.com`, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       environment_id: planOut.environmentId,
-      container_port: 3000, env_vars: "{}",
+      container_port: 3000, env_vars: JSON.stringify({ env: {}, outputs: {} }),
     });
     db.setAppStack(appA.id, planOut.stackId);
     enqueueOperation({
@@ -516,7 +354,7 @@ describe("deploy_stack membership reconciliation", () => {
       image_ref: app("database").image_ref,
       container_port: 5432,
       environment_id: planOut.environmentId,
-      env_vars: "{}",
+      env_vars: JSON.stringify({ env: {}, outputs: {} }),
     });
     db.setAppStack(stale.id, planOut.stackId);
 
@@ -549,7 +387,7 @@ describe("deploy_stack membership reconciliation", () => {
       image_ref: app("database").image_ref,
       container_port: 5432,
       environment_id: planOut.environmentId,
-      env_vars: "{}",
+      env_vars: JSON.stringify({ env: {}, outputs: {} }),
     });
     db.setAppStack(retained.id, planOut.stackId);
 
@@ -558,97 +396,67 @@ describe("deploy_stack membership reconciliation", () => {
   });
 });
 
-describe("deploy_stack shared staging environment", () => {
-  function planOf(
-    name: string,
-    apps: unknown[],
-    opts: { staging?: number | null; envVars?: Array<{ key: string; value: string }> } = {},
-  ) {
-    const input = {
-      ...req(name, apps as ReturnType<typeof app>[]),
-      ...("staging" in opts ? { staging_environment_id: opts.staging } : {}),
-      ...(opts.envVars ? { env_vars: opts.envVars } : {}),
-    } as StackDeployRequest;
-    return planStep.run(makeCtx(input), {});
-  }
 
-  type Out = {
-    stagingEnvironmentId: number | null;
-    stagingByKey: Record<string, number | null>;
-    createdStagingEnv: boolean;
-    environmentId: number;
-  };
-
-  test("creates no staging environment implicitly", async () => {
-    const name = `s-${randomSuffix()}`;
-    const out = (await planOf(name, [app("web"), app("api")])) as Out;
-    expect(out.createdStagingEnv).toBe(false);
-    expect(out.stagingEnvironmentId).toBeNull();
-    expect(db.getStackByName(name)!.staging_environment_id).toBeNull();
+describe("explicit stack runtime environment", () => {
+  test("infers ordering from output references", () => {
+    expect(topoLevels([
+      { ...app("web"), env: { DATABASE_URL: { from: "apps.database.outputs.URL" } } },
+      app("database"),
+    ])).toEqual([["database"], ["web"]]);
   });
-
-  test("reuses an explicitly named staging env instead of auto-creating one", async () => {
-    const chosen = db.insertEnvironment(`staging-${randomSuffix()}`, "");
-    const name = `s-${randomSuffix()}`;
-    const out = (await planOf(name, [app("web")], { staging: chosen.id })) as Out;
-    expect(out.createdStagingEnv).toBe(false);
-    expect(out.stagingEnvironmentId).toBe(chosen.id);
+  test("rejects a missing environment reference before creating state", async () => {
+    const input = req(`s-${randomSuffix()}`, [app("web")]);
+    input.apps[0].env = { TOKEN: { from: "environment.TOKEN" } };
+    await expect(validatePlanStep.run(makeCtx(input), {})).rejects.toThrow();
+    expect(db.getStackByName(input.name)).toBeNull();
   });
-
-  test("a re-up without the selector keeps the stored staging environment", async () => {
-    const name = `s-${randomSuffix()}`;
-    const chosen = db.insertEnvironment(`staging-${randomSuffix()}`, "");
-    const first = (await planOf(name, [app("web")], { staging: chosen.id })) as Out;
-    const before = db.getEnvironments().length;
-
-    const second = (await planOf(name, [app("web")])) as Out;
-    expect(second.stagingEnvironmentId).toBe(first.stagingEnvironmentId);
-    expect(second.createdStagingEnv).toBe(false);
-    expect(db.getEnvironments().length).toBe(before);
+  test("validates output references against desired members before creation", async () => {
+    const input = req(`s-${randomSuffix()}`, [app("web"), app("database", undefined, {
+      URL: { template: "postgres://{app.host}:{app.port}" },
+    })]);
+    input.apps[0].env = { DATABASE_URL: { from: "apps.database.outputs.URL" } };
+    const result = await validatePlanStep.run(makeCtx(input), {}) as { levels: string[][] };
+    expect(result.levels).toEqual([["database"], ["web"]]);
+    expect(db.getStackByName(input.name)).toBeNull();
   });
-
-  test("an explicit null clears the stored staging env", async () => {
-    const name = `s-${randomSuffix()}`;
-    const chosen = db.insertEnvironment(`staging-${randomSuffix()}`, "");
-    await planOf(name, [app("web")], { staging: chosen.id });
-    const out = (await planOf(name, [app("web")], { staging: null })) as Out;
-    expect(out.stagingEnvironmentId).toBeNull();
-    expect(db.getStackByName(name)!.staging_environment_id).toBeNull();
-  });
-
-  test("rejects an unknown staging environment id", async () => {
-    const name = `s-${randomSuffix()}`;
-    await expect(planOf(name, [app("web")], { staging: 999_999 })).rejects.toThrow(
-      /staging environment 999999 not found/i,
-    );
-  });
-
-  test("applies staging-only overrides to the explicitly selected environment", async () => {
-    const name = `s-${randomSuffix()}`;
-    const chosen = db.insertEnvironment(`staging-${randomSuffix()}`, "");
-    const input = {
-      ...req(name, [app("web")]),
-      staging_environment_id: chosen.id,
-      env_vars: [{ key: "DATABASE_URL", value: "postgres://production" }],
-      staging_env_vars: [{ key: "DATABASE_URL", value: "postgres://staging", secret: true }],
-      staging_env_keys: ["DATABASE_URL"],
-    } as StackDeployRequest;
-    const out = await planStep.run(makeCtx(input), {}) as Out;
-    const vars = await resolveEnvVarsForDeploy(db.getEnvironment(out.stagingEnvironmentId!)!.env_vars);
-    expect(vars.DATABASE_URL).toBe("postgres://staging");
-    expect(JSON.parse(db.getStackByName(name)!.staging_env_keys)).toEqual(["DATABASE_URL"]);
-  });
-
-  test("cannot certify a production key without applying a staging value", async () => {
-    const name = `s-${randomSuffix()}`;
-    const chosen = db.insertEnvironment(`staging-${randomSuffix()}`, "");
-    const input = {
-      ...req(name, [app("web")]),
-      staging_environment_id: chosen.id,
-      env_vars: [{ key: "DATABASE_URL", value: "postgres://production" }],
-      staging_env_keys: ["DATABASE_URL"],
-    } as StackDeployRequest;
+  test("does not change stored values and clears omitted environment selectors", async () => {
+    const environment = db.insertEnvironment(`existing-${randomSuffix()}`, "{}");
+    const input = { ...req(`s-${randomSuffix()}`, [app("web")]), environment_id: environment.id, staging_environment_id: environment.id };
     await planStep.run(makeCtx(input), {});
-    expect(JSON.parse(db.getStackByName(name)!.staging_env_keys)).toEqual([]);
+    expect(db.getEnvironment(environment.id)!.env_vars).toBe("{}");
+    await planStep.run(makeCtx(req(input.name, [app("web")])), {});
+    expect(db.getStackByName(input.name)!.environment_id).toBeNull();
+    expect(db.getStackByName(input.name)!.staging_environment_id).toBeNull();
   });
+});
+
+describe("stack member environment selectors", () => {
+  test("omission inherits the stack environment", () => {
+    expect(stackMemberEnvironmentId(app("web"), 10)).toBe(10);
+  });
+  test("an explicit child environment selects its existing values", () => {
+    const child = db.insertEnvironment(`child-${randomSuffix()}`, "{}");
+    expect(stackMemberEnvironmentId({ ...app("web"), environment: child.name }, 10)).toBe(child.id);
+  });
+  test("an explicit null detaches a child from the stack environment", () => {
+    expect(stackMemberEnvironmentId({ ...app("web"), environment: null }, 10)).toBeNull();
+  });
+});
+
+test("stack preflight resolves inherited and overridden values and rejects detached references", async () => {
+  const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
+  const shared = db.insertEnvironment(`shared-${randomSuffix()}`, serializeEnvVars([
+    { key: "SHARED", value: "shared", secret: false, updated_at: "now" },
+  ]));
+  const child = db.insertEnvironment(`child-${randomSuffix()}`, serializeEnvVars([
+    { key: "CHILD", value: "child", secret: false, updated_at: "now" },
+  ]));
+  const input: StackDeployRequest = { name: `selectors-${randomSuffix()}`, environment_id: shared.id, apps: [
+    { ...app("inherited"), env: { VALUE: { from: "environment.SHARED" } } },
+    { ...app("overridden"), environment: child.name, env: { VALUE: { from: "environment.CHILD" } } },
+  ] };
+  await validatePlanStep.run(makeCtx(input), {});
+  input.apps[1].environment = null;
+  await expect(validatePlanStep.run(makeCtx(input), {})).rejects.toThrow(/none is selected/);
+  expect(db.getStackByName(input.name)).toBeNull();
 });

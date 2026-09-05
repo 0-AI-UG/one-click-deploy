@@ -2,6 +2,8 @@ import { StorageBindingsSchema } from "./storage-schema.ts";
 import { publicPortRange, type PublicProtocol, type InternalProtocol } from "./db/apps.ts";
 import {
   DeployManifestSchema,
+  RuntimeEnvSchema,
+  RuntimeOutputsSchema,
   got as gotManifestValue,
   MIN_MEMORY_MB,
   MAX_MEMORY_MB,
@@ -438,7 +440,8 @@ export function validateDeployRequest(req: {
   image_ref?: string;
   git_commit?: string;
   container_port: number;
-  env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
+  env?: import("./manifest-schema.ts").RuntimeEnv;
+  outputs?: import("./manifest-schema.ts").RuntimeOutputs;
   environment?: string | null;
   environment_id?: number | null;
   volume_id?: string;
@@ -525,9 +528,13 @@ export function validateDeployRequest(req: {
     return { valid: false, error: "Health check expected statuses must be a non-empty array of HTTP codes 100-599" };
   }
 
-  if (req.env_vars) {
-    const envResult = validateEnvVars(req.env_vars);
-    if (!envResult.valid) return { valid: false, error: envResult.error };
+  for (const field of ["env_vars", "env_projection", "exports"]) {
+    if (field in req) return { valid: false, error: `${field} is not supported; use an explicit env map and outputs` };
+  }
+  for (const [label, schema, value] of [["env", RuntimeEnvSchema, req.env], ["outputs", RuntimeOutputsSchema, req.outputs]] as const) {
+    if (value === undefined) continue;
+    const parsed = schema.safeParse(value);
+    if (!parsed.success) return { valid: false, error: `${label}: ${parsed.error.message}` };
   }
 
   if (

@@ -49,7 +49,6 @@ its current immutable image. Use it only when source bytes do not need a build.
 ## Allowed deploy flags
 
 ```text
---set=KEY=VALUE
 --auth-password-env=KEY
 --server=ID
 --app=EXISTING_APP
@@ -59,7 +58,7 @@ its current immutable image. Use it only when source bytes do not need a build.
 --allow-unknown
 ```
 
-`--set` and `--auth-password-env` supply values that must not be committed.
+Set stored values with `ocd envs set`; `--auth-password-env` reads a local basic-auth password.
 `--server` is a one-deploy placement override; persistent intent belongs in the
 manifest.
 

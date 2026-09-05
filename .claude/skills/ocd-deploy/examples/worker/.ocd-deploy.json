@@ -10,12 +10,17 @@
     "image_repository": "registry.example.com/team/worker",
     "webhook": false
   },
-  "env": [
-    { "key": "REDIS_URL", "description": "Redis connection string", "required": true, "secret": true },
-    { "key": "CONCURRENCY", "default": "4" }
-  ],
+  "env": {
+    "REDIS_URL": {
+      "from": "environment.REDIS_URL"
+    },
+    "CONCURRENCY": "4"
+  },
   "volume": null,
   "public": false,
-  "health_check": { "mode": "container" },
-  "suggested_app_name": "myapp-worker"
+  "health_check": {
+    "mode": "container"
+  },
+  "suggested_app_name": "myapp-worker",
+  "environment": "production"
 }

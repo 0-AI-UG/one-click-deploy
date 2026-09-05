@@ -1,4 +1,5 @@
 import * as db from "../../shared/db.ts";
+import { getAppsAffectedByEnvironment } from "../../shared/db/apps.ts";
 import {
   enqueueOperation,
   listChildOperations,
@@ -39,17 +40,11 @@ const resolveApps: Step<CascadeRedeployInput, ResolveOut> = {
   async run(ctx) {
     const env = db.getEnvironment(ctx.input.environmentId);
     if (!env) throw new Error(`Environment ${ctx.input.environmentId} not found`);
-    const apps = db.getAppsByEnvironmentId(ctx.input.environmentId);
+    const apps = getAppsAffectedByEnvironment(ctx.input.environmentId, ctx.input.changedKeys);
     const requested = ctx.input.appIds ? new Set(ctx.input.appIds) : null;
-    const changed = ctx.input.changedKeys ? new Set(ctx.input.changedKeys) : null;
     const appIds = apps
       .filter((a) => shouldRedeploy(a.status))
       .filter((a) => !requested || requested.has(a.id))
-      .filter((a) => {
-        if (!changed) return true;
-        const projection = db.parseAppEnvProjection(a);
-        return projection === null || projection.some((key) => changed.has(key));
-      })
       .map((a) => a.id);
     ctx.log(`resolved ${appIds.length} app(s) for ${ctx.input.mode ?? "redeploy"} rollout from env ${env.name}`);
     return { appIds };
@@ -66,7 +61,7 @@ const enqueueChildRedeploys: Step<CascadeRedeployInput, EnqueueOut> = {
     const existingByKey = new Map(existing.map((c) => [c.idempotency_key ?? "", c]));
 
     const childOpIds: number[] = [];
-    const kind = ctx.input.mode === "restart" ? "reload_app" : "redeploy";
+    const kind = "reload_app";
     for (const appId of appIds) {
       const key = `cascade:${ctx.opId}:${appId}`;
       const prev = existingByKey.get(key);

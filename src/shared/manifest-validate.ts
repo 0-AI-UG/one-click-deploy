@@ -100,7 +100,7 @@ function runValidation(
       for (const key of issue.keys) {
         const prefix = fieldPath(issue.path as PathSeg[]);
         const field = prefix ? `${prefix}.${key}` : key;
-        if (options.allowUnknown) {
+        if (options.allowUnknown && !["env_projection", "exports", "staging_env", "env_all", "env"].includes(key)) {
           // eslint-disable-next-line no-console
           console.warn(`Manifest ${sourcePath}: unknown key "${field}" (ignored by --allow-unknown)`);
         } else {

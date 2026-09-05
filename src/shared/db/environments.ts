@@ -1,5 +1,6 @@
+import { parseEnvVars } from "../env-crypto.ts";
+import { getAppsAffectedByEnvironment } from "./apps.ts";
 import db from "./connection.ts";
-import { InjectedEnvVarError, parseEnvVars } from "../env-crypto.ts";
 
 export type EnvironmentRow = {
   id: number;
@@ -37,19 +38,20 @@ export function insertEnvironment(name: string, envVars: string): EnvironmentRow
   return result;
 }
 
-export function updateEnvironment(id: number, name: string, envVars: string, options: { injection?: boolean } = {}): void {
-  if (!options.injection) {
-    const previous = getEnvironment(id) ?? getDeletedEnvironment(id);
-    const incoming = parseEnvVars(envVars).entries;
-    for (const entry of parseEnvVars(previous?.env_vars).entries) {
-      if (!entry.injected_by) continue;
-      const matches = incoming.filter((candidate) => candidate.key === entry.key);
-      if (matches.length !== 1 || JSON.stringify(matches[0]) !== JSON.stringify(entry)) {
-        throw new InjectedEnvVarError(`${entry.key} is injected by ${entry.injected_by} and is read-only`);
-      }
+export function updateEnvironment(id: number, name: string, envVars: string): void {
+  const previous = getEnvironment(id);
+  const before = new Map(parseEnvVars(previous?.env_vars).entries.map(entry => [entry.key, JSON.stringify(entry)]));
+  const after = new Map(parseEnvVars(envVars).entries.map(entry => [entry.key, JSON.stringify(entry)]));
+  const changed = [...new Set([...before.keys(), ...after.keys()])].filter(key => before.get(key) !== after.get(key));
+  const affected = changed.length ? getAppsAffectedByEnvironment(id, changed) : [];
+  db.transaction(() => {
+    db.query("UPDATE environments SET name = ?, env_vars = ? WHERE id = ?").run(name, envVars, id);
+    for (const app of affected) {
+      db.query(`UPDATE apps SET config_revision = config_revision + 1,
+        rollout_requested_revision = CASE WHEN rollout_requested_revision > 0 THEN config_revision + 1 ELSE 0 END
+        WHERE id = ?`).run(app.id);
     }
-  }
-  db.query("UPDATE environments SET name = ?, env_vars = ? WHERE id = ?").run(name, envVars, id);
+  })();
 }
 
 export function deleteEnvironment(id: number): void {

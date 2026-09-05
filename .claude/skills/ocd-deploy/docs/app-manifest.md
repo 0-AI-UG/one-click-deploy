@@ -20,7 +20,7 @@ Unknown fields are rejected by default.
   },
   "container_port": 3000,
   "environment": "production",
-  "env": [{ "key": "DATABASE_URL", "required": true, "secret": true }],
+  "env": { "DATABASE_URL": { "from": "environment.DATABASE_URL" } },
   "domain": "api.example.com",
   "public": true,
   "replicas": 2,
@@ -66,25 +66,41 @@ lifecycle as every other manifest.
 ## Other top-level fields
 
 `$schema`, `$llm`, `name`, `description`, `icon`, `build`, `image`,
-`container_port`, `env`, `exports`, `command`, `cap_add`, `post_start`,
+`container_port`, `env`, `outputs`, `storage`, `command`, `cap_add`, `post_start`,
 `environment`, required `volume` (`null` for none),
-`suggested_app_name`, `domain`, `env_projection`, `auth`, `replicas`,
+`suggested_app_name`, `domain`, `auth`, `replicas`,
 `autoscaling`, `public`, `extra_volumes`, `memory_mb`, `cpu_limit`,
 `health_check`, `internal_protocol`, `sticky`, `rate_limit_rps`,
 `ip_allowlist`, `compress`, `public_port`, `public_protocol`,
 `durability_class`, `placement_pool`, and `scale_to_zero_after` retain their
 normal complete-desired-state semantics.
 
-An env declaration may use `generate: "password"` or `generate: "username"`;
-the value is created only when the selected environment does not already have
-the key. Stack `exports` publish dependency outputs using `{app.host}`,
-`{app.port}`, and `{env.NAME}` templates. Mark credential-bearing outputs with
-`secret: true`.
+The `env` object maps variable names to literal strings or `{ "from":
+"environment.KEY" }` / `{ "from": "apps.MEMBER.outputs.KEY" }` references.
+Only mapped values are delivered; missing references fail deployment. No values
+are generated or written to shared environments during deployment.
 
-Primary volumes are grow-only. `environment` and `domain` are retention
-exceptions: omission retains an existing value, while explicit `null` or `""`
-clears it.
+The `outputs` map defines `{ "template": "...", "secret": true }` values for
+stack consumers. Templates accept `{app.host}`, `{app.port}`, and `{env.KEY}`.
+Secrets propagate from referenced values; mark other sensitive outputs with
+`secret: true`. See [Environments and secrets](environments-and-secrets.md).
 
-```bash
-ocd manifest validate .ocd-deploy.json
-```
+Primary volumes are grow-only. Omission of `environment` detaches a standalone
+app; stack members inherit their stack selection. Explicit `null` detaches.
+Domain omission retains its existing value; an empty string clears it.
+
+## Object storage bindings
+
+`storage` maps binding names to `{ connection?, bucket, prefix, permissions, generation? }`.
+Select a connection by ID or unique name. Omitting it selects the default for a new
+binding; existing bindings keep their pinned connection. Permissions are `read`
+(GET/HEAD), `write` (PUT), `delete`, and `list`. Prefix is explicit: use `""` for
+bucket root or a relative prefix ending in `/`. Bucket creation is separate.
+
+OCD creates a private token per app binding. `primary` injects `OCD_STORAGE_TOKEN`
+and `OCD_STORAGE_URL`; `media` injects `OCD_MEDIA_STORAGE_TOKEN` and
+`OCD_MEDIA_STORAGE_URL`. Values are injected independently of the env map and are
+read-only. Use the OCD storage client, not a standard S3 SDK with this token.
+Increment `generation` to rotate. Old grants are retired after replicas attest
+to the new configuration. Removing `storage` removes the app's bindings.
+Staging manifests must select their own explicit bucket/prefix scope.

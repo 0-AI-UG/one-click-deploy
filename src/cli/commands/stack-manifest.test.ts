@@ -1,9 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  certifiedStagingExistingKeys,
   classifyLocalStackReconcile,
   expandAppDependents,
-  mergeStagingEnv,
 } from "./stack.ts";
 
 describe("stack reconciliation mode", () => {
@@ -43,29 +41,6 @@ describe("stack reconciliation mode", () => {
   test("an immutable image change requires an artifact rollout", () => {
     const changed = { ...desired, image_ref: `ghcr.io/acme/web@sha256:${"c".repeat(64)}` };
     expect(classifyLocalStackReconcile(existing, changed)).toBe("artifact");
-  });
-});
-
-describe("certifiedStagingExistingKeys", () => {
-  test("does not let copied production keys satisfy required staging declarations", () => {
-    const env = {
-      id: 53,
-      name: "copied-staging",
-      env_vars: [{ key: "DATABASE_URL" }, { key: "PUBLIC_BASE_URL" }],
-    };
-    expect([...certifiedStagingExistingKeys(env, "[]")]).toEqual([]);
-    expect([...certifiedStagingExistingKeys(env, '["PUBLIC_BASE_URL"]')]).toEqual(["PUBLIC_BASE_URL"]);
-  });
-
-  test("an explicit empty staging default clears a copied production value", () => {
-    expect(mergeStagingEnv(
-      [{ key: "RESEND_API_KEY", default: "", secret: true }],
-      {},
-      new Set(),
-    )).toEqual({
-      entries: [{ key: "RESEND_API_KEY", value: "", secret: true }],
-      requiredMissing: [],
-    });
   });
 });
 
