@@ -1,5 +1,5 @@
 import { ApiError, post } from "./api.ts";
-import { loadConfig } from "./config.ts";
+import { requireConfig } from "./config.ts";
 import { BOLD, GREEN, RED, RESET } from "./format.ts";
 
 function openBrowser(url: string): void {
@@ -32,8 +32,7 @@ export async function webConfirm(
   const supplied = process.env.OCD_CONFIRMATION_CODE?.trim();
   if (supplied) return supplied;
 
-  const config = loadConfig();
-  const panel = config?.panel_url ?? "";
+  const panel = requireConfig().panel_url;
 
   const { confirm_code, user_code, expires_in, summary } = await post<{
     confirm_code: string;

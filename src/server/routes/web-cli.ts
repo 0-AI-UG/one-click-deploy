@@ -122,6 +122,9 @@ export async function handleCliActionRun(request: Request): Promise<Response> {
       const built = buildWebCliInvocation(command, body.values || {});
       argv = built.argv;
       stdin = built.stdin;
+      if (!WORKSPACE_COMMANDS.has(command.id) && body.workspace !== undefined) {
+        throw new Error("This command does not accept workspace files");
+      }
       if (WORKSPACE_COMMANDS.has(command.id) && body.workspace?.entry !== body.values?.manifest) {
         throw new Error("Workspace entry must match the manifest path");
       }
@@ -189,27 +192,35 @@ export async function handleCliActionRun(request: Request): Promise<Response> {
         try {
           // Setup can fail before a process exists (for example, an unwritable
           // temp directory). Report it through the same error stream.
-          configRoot = mkdtempSync(path.join(tmpdir(), "ocd-ui-action-"));
-          const configDir = path.join(configRoot, "ocd");
-          mkdirSync(configDir, { recursive: true, mode: 0o700 });
-          writeFileSync(
-            path.join(configDir, "config.json"),
-            `${JSON.stringify({ panel_url: localPanelUrl(), token, username: payload.username })}\n`,
-            { mode: 0o600 },
-          );
-          const cwd = prepareWorkspace(configRoot, command.id, body.workspace);
+          // API-only commands must work even when the temporary filesystem is
+          // full. Only manifest commands need a workspace and config file.
+          let cwd = path.parse(process.cwd()).root;
+          if (WORKSPACE_COMMANDS.has(command.id)) {
+            configRoot = mkdtempSync(path.join(tmpdir(), "ocd-ui-action-"));
+            const configDir = path.join(configRoot, "ocd");
+            mkdirSync(configDir, { recursive: true, mode: 0o700 });
+            writeFileSync(
+              path.join(configDir, "config.json"),
+              `${JSON.stringify({ panel_url: localPanelUrl(), token, username: payload.username })}\n`,
+              { mode: 0o600 },
+            );
+            cwd = prepareWorkspace(configRoot, command.id, body.workspace);
+          }
           enqueue(event("start", { command: formatWebCliCommand(argv) }));
           proc = Bun.spawn(invocation, {
             cwd,
             env: {
               // Never expose the panel process environment to a user-authored
               // manifest (for example through auth.password_env). The CLI only
-              // needs its executable search path, locale, temp dir and the
-              // isolated config written above.
+              // needs its executable search path, locale, temp dir and its
+              // short-lived, user-scoped API credentials.
               PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
               LANG: process.env.LANG || "C.UTF-8",
               TMPDIR: process.env.TMPDIR || tmpdir(),
-              XDG_CONFIG_HOME: configRoot,
+              // Keep credentials out of manifest environment interpolation.
+              ...(configRoot
+                ? { XDG_CONFIG_HOME: configRoot }
+                : { OCD_PANEL_URL: localPanelUrl(), OCD_TOKEN: token }),
               ...(confirmationCode ? { OCD_CONFIRMATION_CODE: confirmationCode } : {}),
             },
             stdin: stdin === undefined ? "ignore" : "pipe",

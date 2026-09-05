@@ -16,7 +16,7 @@ test("CLI setup failures produce an error event", async () => {
     const response = await handleCliActionRun(new Request("http://localhost/api/cli-actions/run", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ command_id: "envs.purge", values: { environment: "1" }, confirmed: true }),
+      body: JSON.stringify({ command_id: "manifest.validate", values: { manifest: "app.json" }, workspace: { entry: "app.json", files: [{ path: "app.json", content: "{}" }] } }),
     }));
     const events = (await response.text()).trim().split("\n").map(line => JSON.parse(line));
     expect(events.at(-1)).toMatchObject({ type: "error" });
@@ -27,7 +27,7 @@ test("CLI setup failures produce an error event", async () => {
   }
 });
 
-test("browser CLI purge deletes a protected environment and streams an exit status", async () => {
+test("browser CLI purge works without a writable temporary directory", async () => {
   const user = { userId: seedTestAdmin(), username: "test-admin" };
   const token = await createToken(user);
   const environment = db.insertEnvironment("purge-stream-test", "{}");
@@ -45,6 +45,8 @@ test("browser CLI purge deletes a protected environment and streams an exit stat
       return new Response("Not found", { status: 404 });
     },
   });
+  const previousTmp = process.env.TMPDIR;
+  process.env.TMPDIR = `${useTempDataDir()}/missing-parent`;
   const previousUrl = process.env.OCD_WEB_CLI_PANEL_URL;
   process.env.OCD_WEB_CLI_PANEL_URL = server.url.toString();
   try {
@@ -60,6 +62,8 @@ test("browser CLI purge deletes a protected environment and streams an exit stat
   } finally {
     if (previousUrl === undefined) delete process.env.OCD_WEB_CLI_PANEL_URL;
     else process.env.OCD_WEB_CLI_PANEL_URL = previousUrl;
+    if (previousTmp === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmp;
     server.stop(true);
   }
 }, 20_000);
