@@ -71,9 +71,10 @@ requires reconciling those writes; simply reconnecting an old database loses the
 The four temporary rehearsal databases were removed after confirming zero active
 clients and successful backup restores. Subsequent backups cover the four
 application databases plus postgres. Backup recovery instructions are in
-`services/postgres-backup/README.md`; migration tooling is in
-`services/database-migration/`. Run those tools only as an intentional migration,
-never as normal application startup.
+`services/postgres-backup/README.md`. The one-off migration, rehearsal, PGMQ
+upgrade, and temporary app/panel patch services were removed after completion.
+Their source remains available in Git history; they are not normal application
+startup or deployment dependencies.
 
 ## Resumed rollout verification
 
