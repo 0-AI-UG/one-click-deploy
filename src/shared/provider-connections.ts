@@ -9,6 +9,7 @@ export type ProviderConnection = {
   name: string;
   config: Record<string, string>;
   created_at: string;
+  provisioningDefaults?: { serverType: string; location: string };
 };
 
 export type ProviderAssignments = Record<ProviderUse, string>;
@@ -113,6 +114,23 @@ export function getProviderAssignments(settings = db.getSettings()): ProviderAss
 }
 
 export function saveProviderAssignments(assignments: ProviderAssignments): void {
+  const current = getProviderAssignments();
+  if (current.infrastructure !== assignments.infrastructure) {
+    const settings = db.getSettings();
+    const connections = getProviderConnections(settings);
+    const previous = connections.find((connection) => connection.id === current.infrastructure);
+    if (previous) {
+      previous.provisioningDefaults = {
+        serverType: settings.default_server_type || "",
+        location: settings.default_location || "",
+      };
+      saveProviderConnections(connections);
+    }
+    const next = connections.find((connection) => connection.id === assignments.infrastructure);
+    // Keep the active projection for runtime/CLI consumers of these settings.
+    db.saveSetting("default_server_type", next?.provisioningDefaults?.serverType || "");
+    db.saveSetting("default_location", next?.provisioningDefaults?.location || "");
+  }
   db.saveSetting(PROVIDER_ASSIGNMENTS_SETTING, JSON.stringify(assignments));
 }
 

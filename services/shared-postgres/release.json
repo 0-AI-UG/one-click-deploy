@@ -1,0 +1,60 @@
+{
+  "$schema": 1,
+  "name": "Shared PostgreSQL",
+  "description": "Shared PostgreSQL 17 with PGMQ, PostGIS and pgvector; separate databases and roles per project.",
+  "container_port": 5432,
+  "public": false,
+  "internal_protocol": "tcp",
+  "env": [
+    {
+      "key": "POSTGRES_USER",
+      "default": "postgres"
+    },
+    {
+      "key": "POSTGRES_PASSWORD",
+      "generate": "password",
+      "secret": true
+    },
+    {
+      "key": "POSTGRES_DB",
+      "default": "postgres"
+    },
+    {
+      "key": "PGDATA",
+      "default": "/var/lib/postgresql/data/pgdata"
+    }
+  ],
+  "volume": {
+    "size": 10,
+    "path": "/var/lib/postgresql/data",
+    "driver": "local-directory"
+  },
+  "memory_mb": 2048,
+  "replicas": 1,
+  "health_check": {
+    "mode": "exec",
+    "command": "pg_isready -U postgres -d postgres"
+  },
+  "exports": {
+    "HOST": {
+      "value": "{app.host}"
+    },
+    "PORT": {
+      "value": "{app.port}"
+    }
+  },
+  "image": "ghcr.io/0-ai-ug/ocd-shared-postgres@sha256:e43f62150d6e35bf1dd219f8f54542be6a5db818f5e374e51d8975b306238544",
+  "environment": "shared-data",
+  "env_projection": [
+    "POSTGRES_USER",
+    "POSTGRES_PASSWORD",
+    "POSTGRES_DB",
+    "PGDATA",
+    "BACKUP_ROLE_PASSWORD",
+    "FOODY_ROLE_PASSWORD",
+    "SIGHT_ROLE_PASSWORD",
+    "SKYLINE_ROLE_PASSWORD",
+    "DOCS_ROLE_PASSWORD"
+  ],
+  "suggested_app_name": "ocd-shared-postgres"
+}

@@ -197,6 +197,7 @@ export function mergeDeployRequestWithExistingApp(
     target: supplied.target ?? app.target,
     target_of: supplied.target_of ?? app.target_of ?? undefined,
     volume_id: supplied.volume_id ?? "",
+    volume_driver: supplied.volume_driver ?? (app as db.AppRow & { desired_volume_driver?: string }).desired_volume_driver,
     volume_size: supplied.volume_size ?? 0,
     volume_path: supplied.volume_path ?? "/data",
     manifest_path: supplied.manifest_path,

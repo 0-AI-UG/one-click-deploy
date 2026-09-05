@@ -359,7 +359,8 @@ export function assertSafeHostPath(hostPath: string, appName: string): void {
     `/mnt/ocd-`, // block-storage mounts created by the volume provisioner
     `/mnt/vol-`, // pre-existing block volumes attached by id (attach-existing)
   ];
-  if (!allowedPrefixes.some((p) => normalized.startsWith(p)))
+  const provisionedLocalVolume = new RegExp(`^/var/lib/ocd/volumes/ocd-${appName}-op[0-9]+(?:/|$)`).test(normalized);
+  if (!provisionedLocalVolume && !allowedPrefixes.some((p) => normalized.startsWith(p)))
     throw new Error(
       `Volume host path "${hostPath}" is not in the allowlist. ` +
       `Allowed prefixes: ${allowedPrefixes.join(", ")}`,

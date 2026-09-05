@@ -190,6 +190,7 @@ ${BOLD}Options:${RESET}
     placement_pool: manifest.placement_pool ?? "general",
     scale_to_zero_after: manifest.scale_to_zero_after ?? 0,
     volume_id: manifest.volume?.id ?? "",
+    volume_driver: manifest.volume?.driver,
     volume_size: manifest.volume?.size ?? 0,
     volume_path: manifest.volume?.path ?? "/data",
     extra_volumes: manifest.extra_volumes ?? [],

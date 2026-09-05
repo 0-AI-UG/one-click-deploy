@@ -1,6 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import { secretStore } from "../../shared/secret-store.ts";
-import { assignedProvider, providerSecretKey } from "../../shared/provider-connections.ts";
+
 
 export type S3Credentials = {
   accessKey: string;
@@ -63,7 +63,7 @@ export function signS3Request(opts: {
   method: "GET" | "PUT" | "DELETE" | "HEAD";
   path: string;
   credentials: S3Credentials;
-  body?: string;
+  body?: string | Uint8Array;
   now?: Date;
   headers?: Record<string, string>;
 }): { url: string; headers: Record<string, string> } {
@@ -151,36 +151,34 @@ async function s3Request(
   method: "GET" | "PUT" | "DELETE" | "HEAD",
   path: string,
   credentials: S3Credentials,
-  opts: { body?: string; headers?: Record<string, string>; fetcher?: typeof fetch } = {},
+  opts: { body?: string | Uint8Array; headers?: Record<string, string>; fetcher?: typeof fetch } = {},
 ): Promise<Response> {
   const signed = signS3Request({ method, path, credentials, body: opts.body, headers: opts.headers });
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
-  try {
-    const response = await (opts.fetcher ?? fetch)(signed.url, {
-      method,
-      headers: signed.headers,
-      body: method === "PUT" && opts.body ? opts.body : undefined,
-      signal: controller.signal,
-    });
-    if (response.ok) return response;
-    const xml = await response.text();
-    const code = xmlTag(xml, "Code") || `HTTP_${response.status}`;
-    const providerMessage = xmlTag(xml, "Message");
-    const message = code === "BucketNotEmpty"
-      ? "Bucket is not empty. OCD never recursively deletes objects; remove every object and version first."
-      : code === "AccessDenied"
-        ? "Access denied. Check the S3 credentials and bucket policy."
-        : code === "InvalidAccessKeyId" || code === "SignatureDoesNotMatch"
-          ? "Invalid S3 credentials."
-          : providerMessage || `S3 request failed (${response.status})`;
-    throw new S3Error(message, response.status, code);
-  } finally {
-    clearTimeout(timeout);
-  }
+  const signal = AbortSignal.timeout(120_000);
+  const response = await (opts.fetcher ?? fetch)(signed.url, {
+    method,
+    headers: signed.headers,
+    body: method === "PUT" && opts.body ? (typeof opts.body === "string" ? opts.body : new Uint8Array(opts.body)) : undefined,
+    signal,
+    redirect: "error",
+  });
+  if (response.ok) return response;
+  const xml = await response.text();
+  const code = xmlTag(xml, "Code") || `HTTP_${response.status}`;
+  const providerMessage = xmlTag(xml, "Message");
+  const message = code === "BucketNotEmpty"
+    ? "Bucket is not empty. OCD never recursively deletes objects; remove every object and version first."
+    : code === "AccessDenied"
+      ? "Access denied. Check the S3 credentials and bucket policy."
+      : code === "InvalidAccessKeyId" || code === "SignatureDoesNotMatch"
+        ? "Invalid S3 credentials."
+        : providerMessage || `S3 request failed (${response.status})`;
+  throw new S3Error(message, response.status, code);
+
 }
 
 export async function getS3Credentials(): Promise<S3Credentials | null> {
+  const { assignedProvider, providerSecretKey } = await import("../../shared/provider-connections.ts");
   const provider = assignedProvider("object_storage");
   if (!provider || provider.kind !== "s3-compatible") return null;
   const [accessKey, secretKey] = await Promise.all([
@@ -222,4 +220,36 @@ export async function deleteBucket(
   const checked = validateBucketName(name);
   if (!checked.valid) throw new Error(checked.error);
   await s3Request("DELETE", `/${encodeURIComponent(checked.value)}`, credentials, { fetcher });
+}
+
+function objectPath(bucket: string, key: string): string {
+  const checked = validateBucketName(bucket);
+  if (!checked.valid || checked.value !== bucket) throw new Error("Invalid bucket name");
+  if (!key || key.split("/").some(part => part === "." || part === "..")) throw new Error("Invalid object key");
+  return `/${bucket}/${key.split("/").map(part => encodeURIComponent(part).replace(/[!'()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)).join("/")}`;
+}
+
+export async function putObject(bucket: string, key: string, body: Uint8Array, credentials: S3Credentials): Promise<void> {
+  await s3Request("PUT", objectPath(bucket, key), credentials, { body, headers: { "content-type": "application/octet-stream" } });
+}
+export async function getObject(bucket: string, key: string, credentials: S3Credentials): Promise<Buffer> {
+  const response = await s3Request("GET", objectPath(bucket, key), credentials);
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Empty S3 response");
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > 512 * 1024 * 1024) throw new Error("Backup object exceeds 512 MiB limit");
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks);
+  } finally { await reader.cancel(); }
+
+}
+export async function deleteObject(bucket: string, key: string, credentials: S3Credentials): Promise<void> {
+  await s3Request("DELETE", objectPath(bucket, key), credentials);
 }

@@ -1,0 +1,29 @@
+{
+  "$schema": 1,
+  "name": "Skyline backups migration",
+  "image": "ghcr.io/0-ai-ug/ocd-storage-apps@sha256:d35f467c97dd654ad38ff7c57b948bdc67ca3d5527b6dc0f9e106fb52e636e7d",
+  "environment": "skyline",
+  "env_projection": [
+    "OCD_STORAGE_URL",
+    "BACKUP_S3_BUCKET",
+    "BACKUP_S3_ENDPOINT",
+    "BACKUP_S3_REGION",
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY",
+    "OCD_LEGACY_BACKUP_STORAGE_TOKEN"
+  ],
+  "command": [
+    "bun",
+    "run.ts",
+    "backups"
+  ],
+  "volume": null,
+  "public": false,
+  "container_port": 3000,
+  "replicas": 1,
+  "memory_mb": 1024,
+  "health_check": {
+    "mode": "exec",
+    "command": "test ! -f /tmp/migration-failed"
+  }
+}

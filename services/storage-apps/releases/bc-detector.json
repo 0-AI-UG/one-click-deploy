@@ -1,0 +1,219 @@
+{
+  "$schema": 1,
+  "$llm": "https://ocd.cero-ai.com/llm.txt",
+  "name": "BC Detector",
+  "description": "ML detection queue consumer (@skyline/detector): building verification + DINOv2 embeddings (owl pipeline: OWL-v2 gate chain; v4 pipeline: retrieval-first, no OWL). No exposed port; downloads multi-GB model weights into the persistent volume on first run. On a fresh database, deploy after BC Web API has booted once (it runs the migrations).",
+  "container_port": 3000,
+  "environment": "skyline",
+  "env": [
+    {
+      "key": "DATABASE_URL",
+      "description": "Postgres connection string — same database as BC Web API. In an ocd stack this is auto-derived at boot from the injected POSTGRES_URL plus POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB (see docker/derive-db-url.sh), so leave it unset. Set it explicitly only for standalone/compose deploys.",
+      "secret": true
+    },
+    {
+      "key": "POSTGRES_DB",
+      "description": "Postgres database name for the stack-derived DATABASE_URL. Must match the BC Postgres member.",
+      "default": "building_classification"
+    },
+    {
+      "key": "DETECTOR_DB_PASSWORD",
+      "description": "Password for the restricted skyline_detector runtime role.",
+      "required": true,
+      "secret": true
+    },
+    {
+      "key": "DETECTOR_CONCURRENCY",
+      "description": "Number of detection jobs processed concurrently.",
+      "default": "1"
+    },
+    {
+      "key": "QUEUE_MAX_ATTEMPTS",
+      "description": "Maximum delivery attempts before a detection job is dead-lettered.",
+      "default": "5"
+    },
+    {
+      "key": "DETECTOR_PROPOSER",
+      "description": "owl pipeline only (ignored by v4, which never loads OWL): box-proposer model — 'owlv2' (current production) or 'owlvit32' (bench-validated, ~8.6x faster proposer stage; loads fp32 ~612 MB, ignoring DETECTOR_DTYPE).",
+      "default": "owlv2"
+    },
+    {
+      "key": "DETECTOR_PIPELINE",
+      "description": "Verification pipeline: 'owl' (OWL-v2 + SegFormer-b2 + CLIP gate chain) or 'v4' (retrieval-first kNN verdict in ~200ms, committed immediately; runs only DINOv2 + SegFormer-b0 + lazy CLIP — no OWL. detection_box = seg-derived box, crop_embedding = full-frame embedding, detection_score stays NULL).",
+      "default": "owl"
+    },
+    {
+      "key": "DETECTOR_REFS_PATH",
+      "description": "v4 only: path to the reference embedding library JSON. Empty uses the file bundled in the image (services/detector/src/reference-library.json)."
+    },
+    {
+      "key": "DETECTOR_DTYPE",
+      "description": "Model precision for the big models (OWL-v2 + CLIP): fp16 or fp32 (q8 measured harmful). Owl pipeline mostly; v4 only touches it via the rare lazy CLIP OOD fallback.",
+      "default": "fp16"
+    },
+    {
+      "key": "DETECTOR_CPU_MEM_ARENA",
+      "description": "Enable the onnxruntime CPU memory arena.",
+      "default": "false"
+    },
+    {
+      "key": "DETECT_THRESHOLD",
+      "description": "OWL proposal confidence threshold.",
+      "default": "0.1"
+    },
+    {
+      "key": "BUILDING_PIXEL_MIN",
+      "description": "Minimum building-pixel fraction for the OWL pipeline.",
+      "default": "0.35"
+    },
+    {
+      "key": "SKYSCRAPER_ASPECT_MIN",
+      "description": "Minimum skyscraper aspect-ratio score for the OWL pipeline.",
+      "default": "1.0"
+    },
+    {
+      "key": "SKYSCRAPER_CLIP_MIN",
+      "description": "Minimum CLIP skyscraper score for the OWL pipeline.",
+      "default": "0.5"
+    },
+    {
+      "key": "V4_KNN_K",
+      "description": "Nearest-neighbor count used by the v4 retrieval verdict.",
+      "default": "5"
+    },
+    {
+      "key": "V4_OOD_TAU",
+      "description": "Out-of-distribution similarity threshold for v4.",
+      "default": "0.3"
+    },
+    {
+      "key": "V4_OOD_ASPECT_MIN",
+      "description": "Minimum aspect ratio for v4 OOD fallback.",
+      "default": "1.0"
+    },
+    {
+      "key": "V4_VOTE_MIN",
+      "description": "Minimum similarity-weighted passing vote share for v4.",
+      "default": "0.5"
+    },
+    {
+      "key": "V4_SEG_FEED",
+      "description": "Segmentation input size for v4.",
+      "default": "384"
+    },
+    {
+      "key": "V4_MIN_BLOB_FRAC",
+      "description": "Minimum detected-building blob fraction before v4 requests a zoom crop.",
+      "default": "0.03"
+    },
+    {
+      "key": "V4_ZOOM_PAD",
+      "description": "Padding multiplier for v4 zoom recapture.",
+      "default": "1.5"
+    },
+    {
+      "key": "V4_PERSON_MAX",
+      "description": "Maximum person fraction allowed by the v4 scene filter.",
+      "default": "0.1"
+    },
+    {
+      "key": "V4_SCREEN_MAX",
+      "description": "Maximum screen fraction allowed by the v4 scene filter.",
+      "default": "1"
+    },
+    {
+      "key": "V4_INDOOR_MAX",
+      "description": "Maximum indoor-scene fraction allowed by the v4 scene filter.",
+      "default": "1"
+    },
+    {
+      "key": "STORAGE_DRIVER",
+      "description": "'s3' (production default) — must point at the same bucket as BC Web API. 'local' only works when all services share one filesystem (docker-compose).",
+      "default": "ocd"
+    },
+    {
+      "key": "DB_POOL_MAX",
+      "description": "Max Postgres connections.",
+      "default": "10"
+    },
+    {
+      "key": "TELEMETRY_SINK",
+      "description": "Where telemetry events go.",
+      "default": "postgres"
+    },
+    {
+      "key": "MODERATION_PROVIDER",
+      "description": "Content moderation provider. Only 'openai' is currently implemented.",
+      "default": "openai"
+    },
+    {
+      "key": "OPENAI_API_KEY",
+      "description": "OpenAI project API key used for image moderation.",
+      "required": true,
+      "secret": true
+    },
+    {
+      "key": "OPENAI_MODERATION_MODEL",
+      "description": "OpenAI moderation model.",
+      "default": "omni-moderation-latest"
+    },
+    {
+      "key": "OCD_STORAGE_URL",
+      "required": true
+    },
+    {
+      "key": "OCD_STORAGE_TOKEN",
+      "required": true,
+      "secret": true
+    }
+  ],
+  "volume": {
+    "id": "106763610",
+    "size": 10,
+    "path": "/app/.model-cache",
+    "driver": "hetzner-block"
+  },
+  "suggested_app_name": "bc-detector",
+  "public": false,
+  "health_check": {
+    "mode": "container"
+  },
+  "memory_mb": 8192,
+  "image": "ghcr.io/0-ai-ug/ocd-storage-apps@sha256:54748bdf2ad61e870d17794451df971dfd02126db10d03dfcc87d75ff97718b4",
+  "env_projection": [
+    "POSTGRES_URL",
+    "WEB_URL",
+    "DATABASE_URL",
+    "POSTGRES_DB",
+    "DETECTOR_DB_PASSWORD",
+    "DETECTOR_CONCURRENCY",
+    "QUEUE_MAX_ATTEMPTS",
+    "DETECTOR_PROPOSER",
+    "DETECTOR_PIPELINE",
+    "DETECTOR_REFS_PATH",
+    "DETECTOR_DTYPE",
+    "DETECTOR_CPU_MEM_ARENA",
+    "DETECT_THRESHOLD",
+    "BUILDING_PIXEL_MIN",
+    "SKYSCRAPER_ASPECT_MIN",
+    "SKYSCRAPER_CLIP_MIN",
+    "V4_KNN_K",
+    "V4_OOD_TAU",
+    "V4_OOD_ASPECT_MIN",
+    "V4_VOTE_MIN",
+    "V4_SEG_FEED",
+    "V4_MIN_BLOB_FRAC",
+    "V4_ZOOM_PAD",
+    "V4_PERSON_MAX",
+    "V4_SCREEN_MAX",
+    "V4_INDOOR_MAX",
+    "STORAGE_DRIVER",
+    "DB_POOL_MAX",
+    "TELEMETRY_SINK",
+    "MODERATION_PROVIDER",
+    "OPENAI_API_KEY",
+    "OPENAI_MODERATION_MODEL",
+    "OCD_STORAGE_URL",
+    "OCD_STORAGE_TOKEN"
+  ]
+}

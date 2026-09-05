@@ -1,0 +1,24 @@
+{
+  "$schema": 1,
+  "name": "Skyline managed role verification",
+  "suggested_app_name": "skyline-role-verification",
+  "image": "ghcr.io/0-ai-ug/ocd-storage-apps@sha256:96aa0500095ddd1aa40aa99ebc3afc62df325bc02719e38e11f3ec5ad5d8264a",
+  "environment": "skyline",
+  "env_projection": [
+    "SHARED_DATABASE_URL"
+  ],
+  "command": [
+    "sh",
+    "-c",
+    "export DATABASE_ROLES_MANAGED=1 MIGRATION_DATABASE_URL=\"${SHARED_DATABASE_URL}_rehearsal\"; bun services/web/provision-db-roles.ts && touch /tmp/roles-verified; exec bun -e \"setInterval(()=>{},60000)\""
+  ],
+  "volume": null,
+  "public": false,
+  "container_port": 3000,
+  "replicas": 1,
+  "memory_mb": 256,
+  "health_check": {
+    "mode": "exec",
+    "command": "test -f /tmp/roles-verified"
+  }
+}

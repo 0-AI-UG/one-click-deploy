@@ -1,0 +1,61 @@
+{
+  "$schema": 1,
+  "name": "Shared PostgreSQL backups",
+  "description": "Bun service backing up every database to OCD-managed nbg1 storage with encryption and download verification.",
+  "build": {
+    "repository": "https://github.com/0-AI-UG/open-cli-deployment.git",
+    "branch": "main",
+    "dockerfile": "services/postgres-backup/Dockerfile",
+    "context": ".",
+    "image_repository": "ghcr.io/0-ai-ug/ocd-postgres-backup",
+    "webhook": false
+  },
+  "container_port": 3000,
+  "public": false,
+  "volume": null,
+  "replicas": 1,
+  "memory_mb": 1024,
+  "env": [
+    {
+      "key": "BACKUP_DATABASE_URL",
+      "required": true,
+      "secret": true
+    },
+    {
+      "key": "BACKUP_ENCRYPTION_KEY",
+      "generate": "password",
+      "secret": true
+    },
+    {
+      "key": "OCD_STORAGE_URL",
+      "required": true
+    },
+    {
+      "key": "OCD_STORAGE_TOKEN",
+      "required": true,
+      "secret": true
+    },
+    {
+      "key": "BACKUP_PREFIX",
+      "default": "shared-postgres"
+    },
+    {
+      "key": "BACKUP_INTERVAL_SECONDS",
+      "default": "21600"
+    }
+  ],
+  "health_check": {
+    "mode": "exec",
+    "command": "bun run /app/backup.ts --health"
+  },
+  "suggested_app_name": "ocd-postgres-backup",
+  "environment": "shared-data",
+  "env_projection": [
+    "BACKUP_DATABASE_URL",
+    "BACKUP_ENCRYPTION_KEY",
+    "OCD_STORAGE_URL",
+    "OCD_STORAGE_TOKEN",
+    "BACKUP_PREFIX",
+    "BACKUP_INTERVAL_SECONDS"
+  ]
+}
