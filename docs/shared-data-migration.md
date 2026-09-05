@@ -124,3 +124,14 @@ and infrastructure adapter changes. Those sources were recovered from the known
 provider-capable image and merged with all migration fixes. No credential
 re-entry is required. The merged source passed typechecking, the UI build and
 all 133 isolated test files (six localhost socket suites rerun outside sandbox).
+
+### Resolved
+
+The provider-capable panel is live from `cb853d1`, image
+`ghcr.io/0-ai-ug/open-cli-deployment@sha256:afcd8b4c2d47591946b2799a9bc146ea1e8014857d8d2afccf15305e7637b20c`.
+Both providers report configured, and the served UI includes Providers and
+Infrastructure. Detector and Redis volume checks passed (3967, 3968). Skyline
+and Sight complete stack reconciliations passed (3969, 3973), retiring the old
+production database app records and retaining their recovery volumes. Docs and
+restore-test cleanup also completed automatically (3964, 3963). No provider
+credential re-entry or volume deletion was needed.
