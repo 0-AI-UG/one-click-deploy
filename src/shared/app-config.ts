@@ -370,7 +370,14 @@ export function deployRequestFromApp(app: AppRow): DeployRequest {
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => [key, canonical(entry)]));
+    }
+    return value;
+  };
+  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 }
 
 /** Diff an explicit manifest/API spec against OCD's currently stored desired
@@ -401,7 +408,7 @@ async function applyEnvironment(app: AppRow, req: DeployRequest): Promise<void> 
     db.updateAppEnvironment(app.id, req.environment_id);
   }
   const config = serializeRuntimeConfig(req);
-  if (config !== app.env_vars) db.updateAppEnvVars(app.id, config);
+  if (!sameValue(parseRuntimeConfig(config), parseRuntimeConfig(app.env_vars))) db.updateAppEnvVars(app.id, config);
 }
 
 /** Apply a complete normalized desired spec to an existing app. It never
@@ -465,7 +472,9 @@ export async function applyAppConfig(
       health_check: desired.health_check,
     });
   }
-  if (effective.auth_password !== undefined) db.updateAppAuthPassword(app.id, effective.auth_password);
+  if (effective.auth_password !== undefined && (effective.auth_password !== "" || app.auth_password_hash !== "")) {
+    db.updateAppAuthPassword(app.id, effective.auth_password);
+  }
   if (changed.has("public_port") || changed.has("public_protocol")) {
     if (desired.public_port == null) {
       db.updateAppPublicExposure(app.id, null, desired.public_protocol);

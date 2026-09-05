@@ -132,6 +132,18 @@ describe("desired app configuration", () => {
     expect(db.getEnvironment(env.id)!.env_vars).toBe(beforeEnvironment);
   });
 
+  test("reordering runtime map keys neither changes configuration nor requests a rollout", async () => {
+    const { app } = seedApp();
+    const request = { app_name: app.name, image_ref: app.image_ref, container_port: 3000,
+      env: { B: "two", A: "one" }, outputs: { URL: { template: "http://{app.host}" }, PORT: { template: "{app.port}" } } };
+    await applyAppConfig(app.id, request);
+    const before = db.getApp(app.id)!;
+    const reordered = { ...request, env: { A: "one", B: "two" }, outputs: { PORT: request.outputs.PORT, URL: request.outputs.URL } };
+    expect(diffAppConfig(before, reordered)).toEqual([]);
+    await applyAppConfig(app.id, reordered);
+    expect(db.getApp(app.id)!.config_revision).toBe(before.config_revision);
+  });
+
   test("missing runtime references fail before desired config or environment linkage changes", async () => {
     const {app,env} = seedApp();
     const before = db.getApp(app.id)!;

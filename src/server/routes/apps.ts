@@ -331,6 +331,7 @@ export async function handleDeploy(request: Request): Promise<Response> {
           ok: true,
           dry_run: true,
           would_create: !existing,
+          current_config_revision: existing?.config_revision ?? null,
           changes,
           build: {
             repository: build.repository,
