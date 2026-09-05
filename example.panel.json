@@ -1,4 +1,5 @@
 {
+  "provisioner": "hetzner",
   "panel_image_ref": "ghcr.io/0-ai-ug/open-cli-deployment@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "domain": "panel.example.com",
   "default_domain_suffix": "apps.example.com",

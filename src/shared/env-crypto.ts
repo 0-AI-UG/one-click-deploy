@@ -23,6 +23,8 @@ export function suspiciousPlaintextKeys(
   return [...new Set(items.filter((item) => !item.secret && isSuspiciousSecretKey(item.key)).map((item) => item.key))];
 }
 
+export class InjectedEnvVarError extends Error {}
+
 export type EnvVarEntry = {
   key: string;
   value: string;
@@ -30,6 +32,7 @@ export type EnvVarEntry = {
   iv?: string;
   secret: boolean;
   updated_at: string;
+  injected_by?: string;
 };
 
 export type EnvVarsV2 = {
@@ -100,6 +103,7 @@ export function maskEnvVarsForResponse(parsed: EnvVarsV2): EnvVarEntry[] {
     value: entry.secret ? SECRET_MASK : entry.value,
     secret: entry.secret,
     updated_at: entry.updated_at,
+    ...(entry.injected_by ? { injected_by: entry.injected_by } : {}),
   }));
 }
 
@@ -113,10 +117,22 @@ export async function mergeEnvVarUpdate(
 ): Promise<EnvVarsV2> {
   const now = new Date().toISOString();
   const existingByKey = new Map(existing.entries.map((e) => [e.key, e]));
+  for (const entry of existing.entries) {
+    if (entry.injected_by && incoming.filter((item) => item.key === entry.key).length !== 1) {
+      throw new InjectedEnvVarError(`${entry.key} is injected by ${entry.injected_by} and cannot be removed or duplicated`);
+    }
+  }
 
   const entries: EnvVarEntry[] = [];
   for (const item of incoming) {
     const prev = existingByKey.get(item.key);
+    if (prev?.injected_by) {
+      if (item.secret !== prev.secret || item.value !== (prev.secret ? SECRET_MASK : prev.value)) {
+        throw new InjectedEnvVarError(`${item.key} is injected by ${prev.injected_by} and is read-only`);
+      }
+      entries.push(prev);
+      continue;
+    }
     const secret = item.secret || isSuspiciousSecretKey(item.key);
 
     if (secret) {
@@ -224,9 +240,11 @@ export async function resolveAppEnvVars(app: AppRow): Promise<Record<string, str
   const projection = db.parseAppEnvProjection(app);
   ownVars = projectEnvVars(ownVars, projection);
   const platform = platformEnvVars(app);
+  const { appStorageEnv } = await import("./object-storage.ts");
   return {
     ...platform,
     ...ownVars,
+    ...await appStorageEnv(app.id),
     // A staging fail-closed guard must not be bypassable by an environment
     // copied from production or by a manifest value.
     OCD_DEPLOY_TARGET: platform.OCD_DEPLOY_TARGET,

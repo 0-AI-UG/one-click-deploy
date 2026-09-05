@@ -27,15 +27,6 @@
       "secret": true
     },
     {
-      "key": "OCD_STORAGE_URL",
-      "required": true
-    },
-    {
-      "key": "OCD_STORAGE_TOKEN",
-      "required": true,
-      "secret": true
-    },
-    {
       "key": "BACKUP_PREFIX",
       "default": "shared-postgres"
     },
@@ -53,9 +44,18 @@
   "env_projection": [
     "BACKUP_DATABASE_URL",
     "BACKUP_ENCRYPTION_KEY",
-    "OCD_STORAGE_URL",
-    "OCD_STORAGE_TOKEN",
     "BACKUP_PREFIX",
     "BACKUP_INTERVAL_SECONDS"
-  ]
+  ],
+  "storage": {
+    "primary": {
+      "connection": "s3-compatible-3206399b",
+      "bucket": "ocd-ceroai-backups",
+      "prefix": "",
+      "permissions": [
+        "read",
+        "write"
+      ]
+    }
+  }
 }

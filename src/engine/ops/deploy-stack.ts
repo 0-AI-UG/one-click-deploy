@@ -116,11 +116,11 @@ export function injectAppUrl(envId: number, key: string, app: AppRow): void {
   if (!envRow) return;
   const parsed = parseEnvVars(envRow.env_vars);
   const existing = parsed.entries.filter((entry) => entry.key === varKey);
-  if (existing.length === 1 && !existing[0].secret && existing[0].value === url) return;
+  if (existing.length === 1 && !existing[0].secret && existing[0].value === url && existing[0].injected_by === key) return;
   const now = new Date().toISOString();
-  const entry: EnvVarEntry = { key: varKey, value: url, secret: false, updated_at: now };
+  const entry: EnvVarEntry = { key: varKey, value: url, secret: false, updated_at: now, injected_by: key };
   const filtered = parsed.entries.filter((e) => e.key !== varKey);
-  db.updateEnvironment(envId, envRow.name, serializeEnvVars([...filtered, entry]));
+  db.updateEnvironment(envId, envRow.name, serializeEnvVars([...filtered, entry]), { injection: true });
 }
 
 /** Publish manifest-defined dependency outputs into the shared environment.
@@ -150,21 +150,21 @@ export async function injectAppExports(
     outputs.push({ key: variable, value: rendered, secret: definition.secret === true });
   }
   const existingEntries = new Map(parseEnvVars(env.env_vars).entries.map((entry) => [entry.key, entry]));
-  if (outputs.every((output) => values[output.key] === output.value && existingEntries.get(output.key)?.secret === output.secret)) {
+  if (outputs.every((output) => values[output.key] === output.value && existingEntries.get(output.key)?.secret === output.secret && existingEntries.get(output.key)?.injected_by === key)) {
     return;
   }
   const entries: EnvVarEntry[] = [];
   for (const output of outputs) {
     if (output.secret) {
       const { encrypted_value, iv } = await encryptValue(output.value);
-      entries.push({ key: output.key, value: "", encrypted_value, iv, secret: true, updated_at: now });
+      entries.push({ key: output.key, value: "", encrypted_value, iv, secret: true, updated_at: now, injected_by: key });
     } else {
-      entries.push({ key: output.key, value: output.value, secret: false, updated_at: now });
+      entries.push({ key: output.key, value: output.value, secret: false, updated_at: now, injected_by: key });
     }
   }
   const replaced = new Set(entries.map((entry) => entry.key));
   const retained = parseEnvVars(env.env_vars).entries.filter((entry) => !replaced.has(entry.key));
-  db.updateEnvironment(envId, env.name, serializeEnvVars([...retained, ...entries]));
+  db.updateEnvironment(envId, env.name, serializeEnvVars([...retained, ...entries]), { injection: true });
 }
 
 /**

@@ -3,6 +3,7 @@ import { requireAdmin } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { getInfrastructureToken, secretStore, maskToken } from "../../shared/secret-store.ts";
+import { assignedProvider } from "../../shared/provider-connections.ts";
 import { defaultInfrastructureProvider } from "../../shared/infrastructure.ts";
 
 const PLAIN_SETTING_KEYS = new Set([
@@ -26,6 +27,12 @@ export async function handleGetSettings(request: Request): Promise<Response> {
       {
         github_oauth_client_id: s.github_oauth_client_id ?? "",
         github_oauth_client_secret: maskToken(githubOauthClientSecret ?? ""),
+        infrastructure_provider: (() => {
+          const connection = assignedProvider("infrastructure", s);
+          const adapter = defaultInfrastructureProvider(s);
+          return connection && adapter?.capabilities.compute
+            ? { id: connection.id, name: connection.name } : null;
+        })(),
         default_domain_suffix: s.default_domain_suffix ?? "",
         default_server_type: s.default_server_type ?? "",
         default_location: s.default_location ?? "",
@@ -48,7 +55,7 @@ export async function handleGetServerTypes(request: Request): Promise<Response> 
   try {
     await requireAdmin(request);
     const compute = defaultInfrastructureProvider(db.getSettings());
-    if (!compute) return Response.json({ server_types: [] }, { headers: corsHeaders });
+    if (!compute?.capabilities.compute) return Response.json({ server_types: [] }, { headers: corsHeaders });
     const token = await getInfrastructureToken(compute.id);
     if (!token) return Response.json({ server_types: [] }, { headers: corsHeaders });
     const types = await compute.listServerTypes();
@@ -63,7 +70,13 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
     await requireAdmin(request);
     const settings = await request.json() as Record<string, unknown>;
 
+    if ("infrastructure_provider_id" in settings &&
+        settings.infrastructure_provider_id !== (assignedProvider("infrastructure")?.id ?? "")) {
+      return Response.json({ error: "Infrastructure provider changed. Reload settings before saving." }, { status: 409, headers: corsHeaders });
+    }
+
     for (const [key, rawValue] of Object.entries(settings)) {
+      if (key === "infrastructure_provider_id") continue;
       if (key === "require_2fa") {
         db.saveSetting(key, rawValue ? "1" : "0");
         continue;

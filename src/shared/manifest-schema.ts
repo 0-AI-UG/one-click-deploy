@@ -1,3 +1,4 @@
+import { StorageBindingsSchema } from "./storage-schema.ts";
 /**
  * Canonical, single-source-of-truth Zod schemas for deploy (`.ocd-deploy.json`)
  * and stack (`ocd-stack.json`) manifests. The TypeScript manifest *types* are
@@ -327,6 +328,7 @@ export const DeployManifestSchema = z
     /** Values exported to dependents in a stack. The map key becomes
      * `<MEMBER>_<KEY>` and the template may reference `{app.host}`,
      * `{app.port}`, and `{env.NAME}`. */
+    storage: StorageBindingsSchema.optional(),
     exports: z.record(
       z.string().refine((key) => ENV_KEY_PATTERN.test(key), {
         error: "expected env-var-name export key",

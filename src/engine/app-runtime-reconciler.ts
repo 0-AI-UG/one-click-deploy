@@ -1,3 +1,4 @@
+import { retireAppStorageGrants } from "../shared/object-storage.ts";
 import * as db from "../shared/db.ts";
 import { enqueueOperation, findActiveOperationByResourceKey } from "../shared/db/operations.ts";
 import { resolveAppEnvVars } from "../shared/env-crypto.ts";
@@ -76,13 +77,17 @@ export async function reconcileAppRuntime(): Promise<void> {
         configRevision: deployed.config_revision,
       };
       let persistentDivergence = false;
-      for (const replica of db.getReplicas(app.id)) {
+      const replicas = db.getReplicas(app.id);
+      let allAttested = replicas.length > 0;
+      for (const replica of replicas) {
         const server = db.getServer(replica.server_id);
-        if (!server || server.status !== "ready") continue;
+        if (!server || server.status !== "ready") { allAttested = false; continue; }
         const wasDivergent = replica.status === "divergent" && !!replica.attestation_error;
         const attestation = await attestReplica(app, replica, server, expected);
+        if (!attestation.ok) allAttested = false;
         if (!attestation.ok && wasDivergent) persistentDivergence = true;
       }
+      if (allAttested && app.status === "running") retireAppStorageGrants(app.id);
       if (persistentDivergence && !findActiveOperationByResourceKey("reload_app", key)) {
         enqueueOperation({
           kind: "reload_app",

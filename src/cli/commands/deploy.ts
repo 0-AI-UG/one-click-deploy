@@ -162,6 +162,7 @@ ${BOLD}Options:${RESET}
     build: manifest.build,
     git_commit: sourceCommit,
     env_projection: manifest.env_projection ?? null,
+    storage: manifest.storage,
     environment_id: environment?.id ??
       (manifest.environment === null ? null : undefined),
     auth_password: authPassword ?? "",

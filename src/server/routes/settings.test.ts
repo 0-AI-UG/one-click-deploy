@@ -176,3 +176,25 @@ describe("handleGetServerTypes", () => {
     expect(await r.json()).toEqual({ server_types: [] });
   });
 });
+
+
+test("rejects defaults submitted for a stale infrastructure connection", async () => {
+  const before = db.getSettings().default_server_type;
+  const response = await handleSaveSettings(req({
+    infrastructure_provider_id: "removed-connection",
+    default_server_type: "wrong-provider-size",
+  }));
+  expect(response.status).toBe(409);
+  expect(db.getSettings().default_server_type).toBe(before);
+});
+
+
+test("settings identify the assigned compute connection and omit it for connected hosts", async () => {
+  await configureTestInfrastructureProvider();
+  const managed = await (await handleGetSettings(req())).json();
+  expect(managed.infrastructure_provider.id).toBeTruthy();
+  expect(managed.infrastructure_provider.name).toBeTruthy();
+  db.saveSetting("provider_assignments", "{}");
+  const connected = await (await handleGetSettings(req())).json();
+  expect(connected.infrastructure_provider).toBeNull();
+});

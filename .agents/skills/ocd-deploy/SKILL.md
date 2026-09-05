@@ -21,7 +21,10 @@ trigger integration; GitHub Actions is not part of app delivery.
 - Webhook delivery checks out the exact pushed commit and reconciles the
   committed manifest or stack. Do not substitute `ocd release` when manifest,
   environment projection, or stack configuration may have changed.
-- Before panel upgrades, back up the database and verify current image digests.
+- Before panel upgrades, back up the database, verify current image digests,
+  and ensure the release commit contains the features running in production.
+- For persistent data, inspect the actual driver and mount; a local directory
+  is not a separately billed provider disk or an enforced size reservation.
 - Do not delete, purge, rollback, migrate, promote, or recover resources
   without explicit user intent.
 
@@ -118,11 +121,13 @@ ocd ops [--app=<app>]
 ocd ops logs <id> [--tail N] [--since TIME|CURSOR] [--child NAME|ID]
     [--phase STEP] [--follow]
 ocd servers
+ocd servers show <name|id> [--storage]
 ocd servers enrollment-key
-ocd servers connect --name=X --address=X --private-address=X --host-key='...'
+ocd servers connect --name=X --address=X --routing-address=X --host-key='...'
 ocd resources
 ocd volumes
-ocd buckets <list|create|delete>
+ocd buckets <list|create|delete> [--storage=<connection>]
+ocd storage <list|grant|revoke>
 ocd ssh
 ```
 
@@ -140,7 +145,7 @@ ocd ssh
 - [Networking and ingress](docs/networking-and-ingress.md)
 - [Infrastructure and server enrollment](docs/infrastructure-and-enrollment.md)
 - [Scaling, storage, and placement](docs/scaling-storage-and-placement.md)
-- [Operations and recovery](docs/operations-and-recovery.md)
+- [Operations, database recovery, and panel backups](docs/operations-and-recovery.md)
 - [Security and deletion](docs/security-and-deletion.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Reference index](reference.md)

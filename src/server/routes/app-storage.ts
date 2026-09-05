@@ -1,3 +1,4 @@
+import { appStorageMounts, measureStorage } from "../lib/storage-inventory.ts";
 import { corsHeaders } from "../lib/cors.ts";
 import { appScope, requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
@@ -48,6 +49,7 @@ export async function handleGetAppStorage(request: Request, appId: number): Prom
         .map((image) => ({ server_id, server_name, ...image }))
     );
     return Response.json({
+      mounts: await measureStorage(appStorageMounts(app)),
       current: current ? {
         deployment_id: current.id,
         image_size_bytes: current.image_size_bytes,

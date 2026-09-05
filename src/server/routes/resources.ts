@@ -1,3 +1,6 @@
+import { localStorageInventory, measureStorage } from "../lib/storage-inventory.ts";
+import { localVolumeIdentity } from "../../shared/storage-display.ts";
+import { storageConnection, getProviderConnections } from "../../shared/provider-connections.ts";
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
@@ -108,7 +111,7 @@ export async function handleGetResources(request: Request): Promise<Response> {
 
     const trackedVolumes = new Map<string, VolumeResource>();
     for (const app of db.getApps()) {
-      if (!app.volume_id) continue;
+      if (!app.volume_id || localVolumeIdentity(app.volume_id) || app.volume_driver === "local-directory") continue;
       const serverId = db.getReplicas(app.id)[0]?.server_id;
       trackedVolumes.set(app.volume_id, {
         id: app.volume_id,
@@ -126,7 +129,7 @@ export async function handleGetResources(request: Request): Promise<Response> {
       });
     }
     for (const retired of db.getRetiredVolumes()) {
-      if (trackedVolumes.has(retired.provider_volume_id)) continue;
+      if (trackedVolumes.has(retired.provider_volume_id) || localVolumeIdentity(retired.provider_volume_id) || retired.driver_id === "local-directory" || retired.state === "deleted") continue;
       trackedVolumes.set(retired.provider_volume_id, {
         id: retired.provider_volume_id,
         name: retired.provider_volume_id,
@@ -170,8 +173,8 @@ export async function handleGetResources(request: Request): Promise<Response> {
           monthly_eur: volumePerGbMonth != null ? volumePerGbMonth * v.sizeGb : null,
         };
       });
-      const observedIds = new Set(providerVolumes.map((volume) => volume.id));
-      volumes = [...providerVolumes, ...volumes.filter((volume) => !observedIds.has(volume.id))];
+      // A successful provider listing is authoritative: stale retirement rows are not billable disks.
+      volumes = providerVolumes;
     } catch (e) {
       console.error("resources: failed to fetch volumes:", e);
     }
@@ -179,7 +182,8 @@ export async function handleGetResources(request: Request): Promise<Response> {
     interface ResourceWithCost { monthly_eur: number | null }
     const sum = (arr: ResourceWithCost[]) =>
       arr.reduce((acc, x) => acc + (typeof x.monthly_eur === "number" ? x.monthly_eur : 0), 0);
-    const s3Credentials = await getS3Credentials();
+    const storage = storageConnection(new URL(request.url).searchParams.get("storage") || undefined);
+    const s3Credentials = storage ? await getS3Credentials(storage.id) : null;
     let buckets: S3Bucket[] = [];
     let s3Error = "";
     if (s3Credentials) {
@@ -201,7 +205,10 @@ export async function handleGetResources(request: Request): Promise<Response> {
     return Response.json({
       servers,
       volumes,
+      local_storage: localStorageInventory(),
       buckets,
+      storage_connection: storage?.id ?? "",
+      storage_connections: getProviderConnections().filter(p => p.kind === "s3-compatible").map(p => ({ id: p.id, name: p.name, ...p.config })),
       s3_configured: !!s3Credentials,
       s3_region: s3Credentials?.region ?? "",
       s3_error: s3Error,
@@ -393,14 +400,15 @@ export async function handleGetVolumeDetail(request: Request, volumeId: string):
     return Response.json({
       id: volume.id,
       name: volume.name,
-      size: volume.sizeGb,
+      size: driver.id === "local-directory" ? null : volume.sizeGb,
+      storage_kind: driver.id === "local-directory" ? "local-directory" : "provider-volume",
       location: volume.location,
       server_name: server?.name || null,
       server_id: server?.id || null,
       app_name: app?.name || null,
       app_id: app?.id || null,
       host_path: hostPath,
-      monthly_eur,
+      monthly_eur: driver.id === "local-directory" ? null : monthly_eur,
       attached: !!volume.attachedServerId,
     }, { headers: corsHeaders });
   } catch (error) {
@@ -711,6 +719,7 @@ export async function handleGetServerDetail(request: Request, serverId: number):
       memory_percent: latest?.memory_percent ?? null,
       disk_used_gb: latest?.disk_used_gb && latest.disk_used_gb > 0 ? latest.disk_used_gb : null,
       disk_total_gb: latest?.disk_total_gb && latest.disk_total_gb > 0 ? latest.disk_total_gb : null,
+      local_storage: await measureStorage(localStorageInventory().filter(m => m.server_id === server.id)),
       disk_free_gb: latest?.disk_total_gb && latest.disk_total_gb > 0
         ? Math.round((latest.disk_total_gb - latest.disk_used_gb) * 10) / 10
         : null,

@@ -177,9 +177,9 @@ async function s3Request(
 
 }
 
-export async function getS3Credentials(): Promise<S3Credentials | null> {
-  const { assignedProvider, providerSecretKey } = await import("../../shared/provider-connections.ts");
-  const provider = assignedProvider("object_storage");
+export async function getS3Credentials(connectionId?: string): Promise<S3Credentials | null> {
+  const { storageConnection, providerSecretKey } = await import("../../shared/provider-connections.ts");
+  const provider = storageConnection(connectionId);
   if (!provider || provider.kind !== "s3-compatible") return null;
   const [accessKey, secretKey] = await Promise.all([
     secretStore.get(providerSecretKey(provider.id, "access_key")),

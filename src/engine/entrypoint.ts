@@ -1,3 +1,5 @@
+import { recoveryPending } from "./panel-protection/recovery-state.ts";
+import { startPanelProtection, stopPanelProtection } from "./panel-protection/index.ts";
 import { startEngine, stopEngine } from "./engine.ts";
 import "./ops/index.ts"; // register op kinds
 import { startReconciler, stopReconciler } from "./reconciler.ts";
@@ -27,7 +29,7 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
  * Safe to call multiple times — subsequent calls are no-ops.
  */
 export function startEngineInProcess(): void {
-  if (started) return;
+  if (started || recoveryPending()) return;
   started = true;
   patchConsoleForOpLogs();
   heartbeat();
@@ -37,6 +39,7 @@ export function startEngineInProcess(): void {
     log("startEngine failed:", err);
   });
   startReconciler();
+  startPanelProtection();
   // The hold-and-forward waker runs in this (panel) process so it can call
   // wakeApp and read the DB directly. Sleeping apps' Traefik routers point at it.
   try {
@@ -51,6 +54,7 @@ export function stopEngineInProcess(): void {
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   heartbeatTimer = null;
   stopReconciler();
+  stopPanelProtection();
   stopWaker();
   stopEngine();
   started = false;

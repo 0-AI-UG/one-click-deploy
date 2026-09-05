@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
+import { initializeProtectionSchema } from "./protection-schema.ts";
 
-export const CURRENT_SCHEMA_VERSION = 114;
+export const CURRENT_SCHEMA_VERSION = 116;
 
 const CURRENT_SCHEMA_STATEMENTS = [
   "CREATE TABLE action_confirmations (\n        confirm_code TEXT PRIMARY KEY,\n        user_code    TEXT NOT NULL UNIQUE,\n        user_id      TEXT NOT NULL,\n        action       TEXT NOT NULL,\n        summary      TEXT NOT NULL,\n        status       TEXT NOT NULL,\n        expires_at   INTEGER NOT NULL,\n        created_at   INTEGER NOT NULL\n      , resource_type TEXT NOT NULL DEFAULT '', resource_id TEXT NOT NULL DEFAULT '')",
@@ -101,6 +102,7 @@ export function initializeCurrentSchema(db: Database): void {
   db.run("BEGIN TRANSACTION");
   try {
     for (const statement of CURRENT_SCHEMA_STATEMENTS) db.run(statement);
+    initializeProtectionSchema(db);
     db.run("INSERT INTO schema_version (version) VALUES (?)", [CURRENT_SCHEMA_VERSION]);
     const insertSetting = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)");
     for (const setting of DEFAULT_SETTINGS) insertSetting.run(setting.key, setting.value);

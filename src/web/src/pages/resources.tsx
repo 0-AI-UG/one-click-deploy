@@ -23,6 +23,7 @@ const RESOURCE_SECTIONS: Array<{ key: ResourceSection; label: string }> = [
 ];
 
 export function ResourcesPage() {
+  const [storageConnection, setStorageConnection] = useState("");
   const [section, setSection] = useState<ResourceSection>("overview");
   const [data, setData] = useState<ResourcesData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -108,7 +109,7 @@ export function ResourcesPage() {
 
   const load = async () => {
     try {
-      const resources = await get("/api/resources");
+      const resources = await get(`/api/resources${storageConnection ? `?storage=${encodeURIComponent(storageConnection)}` : ""}`);
       setData(resources);
     } catch (err: any) {
       showToast(err.message, "error");
@@ -117,7 +118,7 @@ export function ResourcesPage() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [storageConnection]);
 
   const handleDelete = async (type: string, id: string, name: string) => {
     const connectedServer = type === "server" && data?.servers.find((server) => String(server.id) === id)?.ownership === "connected";
@@ -179,8 +180,8 @@ export function ResourcesPage() {
     try {
       await runConfirmedCliAction(
         "buckets.create",
-        { bucket: name },
-        { action: "create_bucket", resourceType: "bucket", resourceId: name },
+        { bucket: name, storage: data?.storage_connection },
+        { action: "create_bucket", resourceType: "bucket", resourceId: `${data?.storage_connection}:${name}` },
       );
       setBucketName("");
       await load();
@@ -200,8 +201,8 @@ export function ResourcesPage() {
     try {
       await runConfirmedCliAction(
         "buckets.delete",
-        { bucket: name },
-        { action: "delete_bucket", resourceType: "bucket", resourceId: name, typedResource: typed },
+        { bucket: name, storage: data?.storage_connection },
+        { action: "delete_bucket", resourceType: "bucket", resourceId: `${data?.storage_connection}:${name}`, typedResource: `${data?.storage_connection}:${typed}` },
       );
       await load();
       showToast("Bucket deleted", "success");
@@ -265,7 +266,7 @@ export function ResourcesPage() {
         <Card className="overflow-hidden">
           {[
             { key: "servers" as const, label: "Servers", value: `${data?.servers?.length || 0} connected resources` },
-            { key: "volumes" as const, label: "Volumes", value: `${data?.volumes?.length || 0} attached or retained volumes` },
+            { key: "volumes" as const, label: "Volumes", value: `${data?.volumes?.length || 0} attached or retained provider volumes` },
             {
               key: "object-storage" as const,
               label: "Object Storage",
@@ -389,6 +390,11 @@ export function ResourcesPage() {
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">S3 Buckets ({data?.buckets?.length || 0})</h3>
           {data?.s3_configured && <span className="font-mono text-[8px] text-muted uppercase">S3 · {data.s3_region}</span>}
         </div>
+        <label className="block mb-3 font-mono text-[10px]">Storage connection
+          <select value={storageConnection || data?.storage_connection || ""} onChange={e => setStorageConnection(e.target.value)} disabled={!!bucketBusy}>
+            {(data?.storage_connections || []).map(connection => <option key={connection.id} value={connection.id}>{connection.name} · {connection.region}</option>)}
+          </select>
+        </label>
         {!data?.s3_configured ? (
           <EmptyState message="S3-compatible storage is not configured. Add and assign a provider under Admin → Providers." />
         ) : data.s3_error ? (
@@ -445,7 +451,8 @@ export function ResourcesPage() {
             </PermissionGate>
           </div>
         </div>
-        {!data?.volumes?.length ? <EmptyState message="No volumes" /> : (
+        <p className="text-xs text-muted mb-3">Provider block volumes only. Server-local directories share the server disk and appear under each server’s Storage and the app’s Storage.</p>
+        {!data?.volumes?.length ? <EmptyState message="No provider volumes" /> : (
           <Table headers={["Name", "State", "Size", "Location", "Server", "App", "€/mo", ""]}>
             {data.volumes.map((v) => (
               <tr key={v.id} className="hover:bg-alt/50">

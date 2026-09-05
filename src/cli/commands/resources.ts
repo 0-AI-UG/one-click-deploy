@@ -96,28 +96,28 @@ async function listResources(): Promise<void> {
   }
 }
 
-async function createS3Bucket(name: string): Promise<void> {
-  const confirmation = await webConfirm("create_bucket", "bucket", name);
+async function createS3Bucket(name: string, storage: string): Promise<void> {
+  const confirmation = await webConfirm("create_bucket", "bucket", `${storage}:${name}`);
   if (!confirmation) {
     console.log("Aborted.");
     return;
   }
   await post<{ ok: boolean }>(
-    "/api/resources/buckets",
+    `/api/resources/buckets?storage=${encodeURIComponent(storage)}`,
     { name },
     { "X-OCD-Confirmation": confirmation },
   );
   console.log(`${GREEN}bucket created.${RESET}`);
 }
 
-async function deleteS3Bucket(name: string): Promise<void> {
-  const confirmation = await webConfirm("delete_bucket", "bucket", name);
+async function deleteS3Bucket(name: string, storage: string): Promise<void> {
+  const confirmation = await webConfirm("delete_bucket", "bucket", `${storage}:${name}`);
   if (!confirmation) {
     console.log("Aborted.");
     return;
   }
   await del<{ ok: boolean }>(
-    `/api/resources/buckets/${encodeURIComponent(name)}`,
+    `/api/resources/buckets/${encodeURIComponent(name)}?storage=${encodeURIComponent(storage)}`,
     undefined,
     { "X-OCD-Confirmation": confirmation },
   );
@@ -125,7 +125,7 @@ async function deleteS3Bucket(name: string): Promise<void> {
 }
 
 function bucketUsage(): void {
-  console.error(`${BOLD}Usage:${RESET} ocd buckets <command>
+  console.error(`${BOLD}Usage:${RESET} ocd buckets <command> [--storage=<connection>]
 
 ${BOLD}Commands:${RESET}
   list                      List buckets visible to the configured S3 key
@@ -134,11 +134,13 @@ ${BOLD}Commands:${RESET}
 }
 
 export async function buckets(args: string[] = []): Promise<void> {
+  const selector = args.find(arg => arg.startsWith("--storage="))?.slice(10);
+  args = args.filter(arg => !arg.startsWith("--storage="));
   const sub = args[0] || "list";
+  if (["help", "--help", "-h"].includes(sub)) return bucketUsage();
+  const data = await get<{ configured: boolean; connection_id: string; buckets: ResourceBucket[] }>(`/api/resources/buckets${selector ? `?storage=${encodeURIComponent(selector)}` : ""}`);
+  if (!data.configured) throw new Error("S3-compatible storage is not configured");
   if (sub === "list" || sub === "ls") {
-    const data = await inventory();
-    if (!data.s3_configured) throw new Error("S3-compatible storage is not configured");
-    if (data.s3_error) throw new Error(data.s3_error);
     table(
       ["NAME", "REGION", "CREATED", "ENDPOINT"],
       data.buckets.map((bucket) => [bucket.name, bucket.region, bucket.createdAt || "-", bucket.endpoint]),
@@ -147,11 +149,11 @@ export async function buckets(args: string[] = []): Promise<void> {
   }
   if (sub === "create") {
     if (!args[1]) throw new Error("Usage: ocd buckets create <name>");
-    return createS3Bucket(args[1]);
+    return createS3Bucket(args[1], data.connection_id);
   }
   if (sub === "delete" || sub === "remove") {
     if (!args[1]) throw new Error("Usage: ocd buckets delete <name>");
-    return deleteS3Bucket(args[1]);
+    return deleteS3Bucket(args[1], data.connection_id);
   }
   if (sub === "help" || sub === "--help" || sub === "-h") return bucketUsage();
   throw new Error(`Unknown bucket command: ${sub}`);
@@ -159,12 +161,12 @@ export async function buckets(args: string[] = []): Promise<void> {
 
 async function showVolume(ref: string): Promise<void> {
   const data = await get<{
-    id: string; name: string; size: number; location: string; server_name: string | null;
+    id: string; name: string; size: number | null; storage_kind?: string; location: string; server_name: string | null;
     app_name: string | null; host_path: string | null; monthly_eur: number | null; attached: boolean;
   }>(`/api/resources/volumes/${encodeURIComponent(ref)}`);
   console.log(`${BOLD}${data.name}${RESET}  ${DIM}${data.id}${RESET}`);
-  console.log(`State: ${data.attached ? "attached" : "detached"}  Size: ${data.size} GB  Location: ${data.location}`);
-  console.log(`Server: ${data.server_name || "-"}  App: ${data.app_name || "-"}  Cost: ${money(data.monthly_eur)}`);
+  console.log(`State: ${data.attached ? "attached" : "detached"}  Size: ${data.storage_kind === "local-directory" ? "shares server disk (no quota)" : `${data.size} GB`}  Location: ${data.location}`);
+  console.log(`Server: ${data.server_name || "-"}  App: ${data.app_name || "-"}  Cost: ${data.storage_kind === "local-directory" ? "no separate storage charge" : money(data.monthly_eur)}`);
   if (data.host_path) console.log(`Host path: ${data.host_path}`);
 }
 

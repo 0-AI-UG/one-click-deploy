@@ -18,6 +18,11 @@ export function createDatabase(dbPathOrMemory: string): Database {
     initializeCurrentSchema(instance);
   } else {
     initLegacySchema(instance);
+    // Schema 114 is an offline cutover, not a migration. Adding later
+    // migrations must not accidentally make older layouts look current.
+    if (currentSchemaVersion(instance) < CURRENT_SCHEMA_VERSION) {
+      throw new Error("Run the release-specific offline cutover to the current schema before starting the panel.");
+    }
     backupBeforeMigrating(instance, dbPathOrMemory);
     runMigrations(instance);
     assertCurrentSchema(instance);

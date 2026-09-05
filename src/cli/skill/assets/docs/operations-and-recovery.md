@@ -12,6 +12,10 @@
 - [App/stack cleanup failure](#appstack-cleanup-failure)
 - [PostgreSQL restore](#postgresql-restore)
 - [Volume recovery](#volume-recovery)
+- [Database consolidation and backups](#database-consolidation-and-backups)
+- [Panel backups and recovery](#panel-backups-and-recovery)
+- [Panel email alerts](#panel-email-alerts)
+- [Host disk pressure](#host-disk-pressure)
 
 ## Durable operation model
 
@@ -192,8 +196,10 @@ After validation, recreate/redeploy linked apps so they use current credentials.
 ## Volume recovery
 
 Destroyed app volumes are detached and retained as user-owned data.
-They remain billable, and their seven-day review date is not automatic
-deletion.
+Provider block volumes remain billable; local directories occupy their host
+disk without a separate storage charge. Their seven-day review date is not
+automatic deletion. Use provider Volumes for block disks and Server → Storage
+for retained local directories.
 
 Volumes created only by a failed deployment are retained as provisional for
 the same seven-day recovery window. After that date, the reconciler permanently
@@ -210,3 +216,72 @@ Recovery:
 4. verify mount path and ownership;
 5. restart/redeploy and validate;
 6. delete only after recovery is no longer required.
+
+## Database consolidation and backups
+
+Preserve the requested storage type, extensions, role isolation, and app
+connection settings. Rehearse into isolated databases, stop writers for the final
+copy, and compare schema/table counts and data before cutover. Update committed
+stack manifests so a later reconciliation does not recreate retired databases.
+Retire migration jobs after verification; removing apps retains their storage.
+Delete old disks only within the user's authorized cleanup scope after checking
+exact provider IDs, detached state, ownership, and verified recovery material.
+
+The OCD repository’s `services/postgres-backup` application runs TypeScript on Bun with
+PostgreSQL dump tools every six hours. It encrypts archives, uploads through
+scoped OCD storage access, downloads and checks SHA-256, and only then publishes
+completion. Dumps are consistent per database, not one transaction across the
+cluster. Role passwords are excluded and need independently recoverable secrets;
+keep the backup encryption key outside the database. Restore into isolation and
+verify extension versions and data before retiring recovery disks. Uploaded
+checksums alone are not proof that a restore works. This app's backups have no
+automatic historical deletion; panel-backup retention is a different feature.
+
+## Panel backups and recovery
+
+**Admin → Panel** protects OCD's SQLite state, SSH files, and credential/JWT
+secret, not application databases, app volumes, images, or DNS. Select a named
+S3 connection, existing bucket and prefix, create/download the recovery key,
+and keep the key and independent storage credentials outside the panel.
+Daily backups default to seven retained successes; uploads are downloaded and
+checksum-verified before completion and retention. **Back up now** is available
+without enabling the schedule. The current size limits are 256 MiB for SQLite
+and 512 MiB for the archive.
+
+Restore with the matching OCD release, stopping the original panel and engine
+first. Run the restore command from the matching OCD release checkout. Supply
+`OCD_RECOVERY_KEY` and, for S3, `OCD_S3_ENDPOINT`, `OCD_S3_REGION`,
+`OCD_S3_ACCESS_KEY`, and `OCD_S3_SECRET_KEY` through the environment:
+
+```bash
+bun run restore:panel --from s3://bucket/prefix/backup.ocdb --data-dir /srv/ocd-restored
+# Or use a previously downloaded encrypted archive:
+bun run restore:panel --file /safe/backup.ocdb --data-dir /srv/ocd-restored
+```
+
+The destination must not exist. Restore authenticates and validates the archive
+and SQLite before installing it. It preserves recorded hosts and panel placement;
+it does not provision infrastructure or migrate the panel. Mount the restored
+directory as the matching panel's data directory. Omit `JWT_SECRET` to load the
+recovered secret, or supply the identical original value.
+
+Automation starts paused. In **Admin → Panel**, confirm the original panel is
+stopped, review saved operations, and use **Verify servers and resume**. OCD
+checks pinned host keys and Docker access; this does not prove application data
+consistency or that old pending operations should be replayed. Scheduled backups
+remain disabled until explicitly re-enabled; stale queued mail is discarded.
+
+## Panel email alerts
+
+**Admin → Panel** supports Resend credentials, recipient, optional sender, and a
+test email. Built-in incidents cover failed delivery, prolonged unhealthy apps,
+failed/overdue panel backups, and sustained server disk use of at least 90%.
+The durable outbox retries delivery and tracks recovery notices. The panel must
+be running to send alerts; it cannot report its own total outage by email.
+
+## Host disk pressure
+
+Inspect server disk metrics and app image storage, then preview safe cleanup
+with `ocd gc --server=<id>`. Use `--execute` within authorized cleanup scope.
+This removes eligible unused images, not database volumes. Check operation
+errors before retrying deployments after freeing space.

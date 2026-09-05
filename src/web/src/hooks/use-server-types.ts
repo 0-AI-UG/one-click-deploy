@@ -26,7 +26,7 @@ export function useServerTypes() {
     try {
       const data = await get("/api/admin/settings/server-types");
       setServerTypes((data as { server_types?: ServerType[] }).server_types ?? []);
-    } catch { /* keep the last known list */ }
+    } catch { setServerTypes([]); }
     finally { setLoading(false); }
   }, []);
 

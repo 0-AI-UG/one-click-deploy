@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission, requireCliPermission, appScope, stackScope } from "../lib/permissions.ts";
+import { requireAdmin, requirePermission, requireCliPermission, appScope, stackScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import type { StackDeployRequest } from "../../shared/rpc.ts";
@@ -52,6 +52,7 @@ export async function handleDeployStack(request: Request): Promise<Response> {
   try {
     const payload = await requireCliPermission(request, "stacks.deploy");
     const req: StackDeployRequest = await request.json();
+    if (req.apps?.some(app => app.storage && Object.keys(app.storage).length)) await requireAdmin(request);
     if (!req?.name || typeof req.name !== "string") {
       return Response.json({ ok: false, error: "name is required" }, { status: 400, headers: corsHeaders });
     }

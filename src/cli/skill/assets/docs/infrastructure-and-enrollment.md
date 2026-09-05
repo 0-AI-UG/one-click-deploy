@@ -58,10 +58,19 @@ connected host; both remain browser-confirmed operations.
 
 ## Optional Hetzner provisioning
 
-An administrator may add a Hetzner Cloud API token in the panel's
-**Optional Infrastructure Provider** settings. Until then, provider server
-types are empty and requests that need new managed capacity fail with guidance
-to configure Hetzner or connect an existing host.
+In **Admin → Providers**, add a Hetzner connection and assign it to
+**Infrastructure**. Provider connections and their assignments are separate;
+credentials remain in the encrypted secret store. S3-compatible connections
+are configured independently and can be assigned as the object-storage default.
+Until compatible infrastructure is configured, requests for new managed capacity
+fail with guidance to configure a provider or connect an existing host.
+
+Named object-storage connections can coexist. Select one by ID or unique name
+with `--storage=<connection>` for bucket commands and manual storage grants.
+Existing managed app bindings and panel backups pin their connection ID;
+changing the global default does not redirect them. Endpoint/region changes or
+deletion are blocked while a connection is referenced; rotate credentials on
+the existing connection or explicitly rebind dependents.
 
 DNS stays operator-owned regardless of infrastructure provider. Configure an
 optional default domain suffix, then create the A/AAAA records OCD displays at

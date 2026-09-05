@@ -1,3 +1,4 @@
+import { PanelProtection } from "./panel-protection.tsx";
 import { useState, useEffect } from "react";
 import { get, post, del, put } from "../../api/client.ts";
 import { Card, Btn, Table, Spinner, Field, Divider, InfoTip, showToast, confirm, PageShell, PageHeader, PageState } from "../../components/ui.tsx";
@@ -136,6 +137,7 @@ export function UsersPage() {
   const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [infrastructureProvider, setInfrastructureProvider] = useState<{ id: string; name: string } | null>(null);
   const [infrastructureEditing, setInfrastructureEditing] = useState(false);
   const [registryEditing, setRegistryEditing] = useState(false);
   const [sourceEditing, setSourceEditing] = useState(false);
@@ -211,6 +213,7 @@ export function UsersPage() {
     loadUsers();
     get("/api/admin/settings")
       .then((s) => {
+        setInfrastructureProvider(s.infrastructure_provider ?? null);
         setRequire2fa(s.require_2fa !== false);
         setSettingsForm({
           github_oauth_client_id: s.github_oauth_client_id ?? "",
@@ -244,12 +247,15 @@ export function UsersPage() {
     return () => window.clearInterval(timer);
   }, [runners]);
 
-  useEffect(() => {
-    if (serverTypes.length > 0 && !settingsForm.default_server_type) {
-      const first = serverTypes[0];
-      setSettingsForm((f) => ({ ...f, default_server_type: first.name, default_location: first.locations[0] ?? "" }));
-    }
-  }, [serverTypes, settingsForm.default_server_type]);
+  const refreshInfrastructure = async () => {
+    const settings = await get("/api/admin/settings");
+    setInfrastructureProvider(settings.infrastructure_provider ?? null);
+    setSettingsForm((current) => ({ ...current,
+      default_server_type: settings.default_server_type ?? "",
+      default_location: settings.default_location ?? "",
+    }));
+    await refreshServerTypes();
+  };
 
   const setS = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setSettingsForm((f) => ({ ...f, [k]: e.target.value }));
@@ -308,7 +314,13 @@ export function UsersPage() {
         github_build_token: _sourceToken,
         ...instanceSettings
       } = settingsForm;
-      await put("/api/admin/settings", instanceSettings);
+      const { default_server_type, default_location, ...generalSettings } = instanceSettings;
+      await put("/api/admin/settings", {
+        ...generalSettings,
+        ...(infrastructureProvider ? { default_server_type, default_location,
+          infrastructure_provider_id: infrastructureProvider.id } : {}),
+      });
+      await refreshReadiness();
       showToast("Settings saved", "success");
       setInfrastructureEditing(false);
       setOauthEditing(false);
@@ -357,7 +369,7 @@ export function UsersPage() {
       else await post("/api/admin/providers", body);
       await refreshProviders();
       await refreshReadiness();
-      await refreshServerTypes();
+      await refreshInfrastructure();
       setProviderForm(null);
       showToast(providerForm.id ? "Provider updated" : "Provider added", "success");
     } catch (err: any) {
@@ -387,7 +399,7 @@ export function UsersPage() {
       await put("/api/admin/providers/assignments", providerData.assignments);
       await refreshProviders();
       await refreshReadiness();
-      await refreshServerTypes();
+      await refreshInfrastructure();
       showToast("Provider assignments saved", "success");
     } catch (err: any) {
       showToast(err.message, "error");
@@ -556,7 +568,7 @@ export function UsersPage() {
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
           {[
             ["Infrastructure", readiness.provider.configured ? "Provider assigned" : "Connected hosts only"],
-            ["Capacity defaults", readiness.defaults.server_type ? `${readiness.defaults.server_type} / ${readiness.defaults.location}` : "Missing"],
+            ["Managed provisioning defaults", infrastructureProvider ? (readiness.defaults.server_type ? `${readiness.defaults.server_type} / ${readiness.defaults.location}` : "Not configured") : "Not applicable"],
             ["Build worker", `${readiness.worker.online} online`],
             ["Registry", readiness.registry.configured ? readiness.registry.scope : "Not connected"],
           ].map(([label, value]) => <div key={label} className="border-2 border-fg/30 p-3">
@@ -709,9 +721,9 @@ export function UsersPage() {
       {section === "infrastructure" && <Card className="p-5 space-y-4">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h2 className="font-mono text-[10px] font-bold uppercase tracking-wider">Infrastructure defaults</h2>
+            <h2 className="font-mono text-[10px] font-bold uppercase tracking-wider">Infrastructure settings</h2>
             <div className="mt-1 font-mono text-[9px] text-muted">
-              {readiness?.provider.configured ? "Managed provisioning available" : "Connected servers only"} · {settingsForm.default_server_type || "No server default"} {settingsForm.default_location && `· ${settingsForm.default_location}`}
+              {infrastructureProvider ? `Managed provisioning · ${infrastructureProvider.name}` : "Connected servers only"}
             </div>
           </div>
           <Btn size="xs" onClick={() => setInfrastructureEditing((open) => !open)}>{infrastructureEditing ? "Close" : "Edit"}</Btn>
@@ -721,22 +733,26 @@ export function UsersPage() {
           <Field label="App domain" align="start" hint="Used as the default domain suffix. OCD shows the DNS records to create but never changes DNS.">
             <input type="text" value={settingsForm.default_domain_suffix} onChange={setS("default_domain_suffix")} placeholder="apps.example.com" />
           </Field>
-          <Field label="Server type">
-            <NeoSelect
-              value={settingsForm.default_server_type}
-              onChange={(v) => {
-                setSettingsForm((f) => {
-                  const locs = locationOptions(serverTypes, v);
-                  const locValid = locs.some((l) => l.value === f.default_location);
-                  return { ...f, default_server_type: v, ...(!locValid && locs.length ? { default_location: locs[0].value } : {}) };
-                });
-              }}
-              options={typeOptions(serverTypes)}
-            />
-          </Field>
-          <Field label="Location">
-            <NeoSelect value={settingsForm.default_location} onChange={(v) => setSettingsForm((f) => ({ ...f, default_location: v }))} options={locationOptions(serverTypes, settingsForm.default_server_type)} />
-          </Field>
+          {infrastructureProvider ? <div className="border-t-2 border-fg/10 pt-4">
+            <h3 className="font-mono text-[10px] font-bold uppercase tracking-wider">Managed provisioning defaults · {infrastructureProvider.name}</h3>
+            <p className="mt-2 text-xs text-muted">Used when OCD creates new servers. Existing connected hosts do not require these defaults.</p>
+            <Field label="Server type">
+              <NeoSelect
+                value={settingsForm.default_server_type}
+                onChange={(v) => {
+                  setSettingsForm((f) => {
+                    const locs = locationOptions(serverTypes, v);
+                    const locValid = locs.some((l) => l.value === f.default_location);
+                    return { ...f, default_server_type: v, ...(!locValid ? { default_location: locs[0]?.value ?? "" } : {}) };
+                  });
+                }}
+                options={[{ value: "", label: "Select server type" }, ...typeOptions(serverTypes)]}
+              />
+            </Field>
+            <Field label="Location">
+              <NeoSelect value={settingsForm.default_location} onChange={(v) => setSettingsForm((f) => ({ ...f, default_location: v }))} options={[{ value: "", label: "Select location" }, ...locationOptions(serverTypes, settingsForm.default_server_type)]} />
+            </Field>
+          </div> : <p className="text-xs text-muted">Deployments use connected hosts. Assign a compute provider in Providers to configure automatic server provisioning.</p>}
           <div className="flex justify-end pt-2">
             <Btn variant="primary" loading={saving} onClick={saveSettings}><Save size={13} /> Save</Btn>
           </div>
@@ -894,6 +910,7 @@ export function UsersPage() {
       </Card>}
 
       {/* Panel */}
+      {section === "panel" && <PanelProtection />}
       {section === "panel" && !panel && <Card className="p-5 font-mono text-[10px] text-muted">This instance is not managed as a self-hosted panel app.</Card>}
       {section === "panel" && panel && (
         <Card className="p-5 space-y-4">

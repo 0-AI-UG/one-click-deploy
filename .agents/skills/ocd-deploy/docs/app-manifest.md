@@ -66,7 +66,7 @@ lifecycle as every other manifest.
 ## Other top-level fields
 
 `$schema`, `$llm`, `name`, `description`, `icon`, `build`, `image`,
-`container_port`, `env`, `exports`, `command`, `cap_add`, `post_start`,
+`container_port`, `env`, `exports`, `storage`, `command`, `cap_add`, `post_start`,
 `environment`, required `volume` (`null` for none),
 `suggested_app_name`, `domain`, `env_projection`, `auth`, `replicas`,
 `autoscaling`, `public`, `extra_volumes`, `memory_mb`, `cpu_limit`,
@@ -88,3 +88,19 @@ clears it.
 ```bash
 ocd manifest validate .ocd-deploy.json
 ```
+
+## Object storage bindings
+
+`storage` maps binding names to `{ connection?, bucket, prefix, permissions, generation? }`.
+Select a connection by ID or unique name. Omitting it selects the default for a new
+binding; existing bindings keep their pinned connection. Permissions are `read`
+(GET/HEAD), `write` (PUT), `delete`, and `list`. Prefix is explicit: use `""` for
+bucket root or a relative prefix ending in `/`. Bucket creation is separate.
+
+OCD creates a private token per app binding. `primary` injects `OCD_STORAGE_TOKEN`
+and `OCD_STORAGE_URL`; `media` injects `OCD_MEDIA_STORAGE_TOKEN` and
+`OCD_MEDIA_STORAGE_URL`. Values bypass shared-environment projection and are
+read-only. Use the OCD storage client, not a standard S3 SDK with this token.
+Increment `generation` to rotate. Old grants are retired after replicas attest
+to the new configuration. Removing `storage` removes the app's bindings.
+Staging manifests must select their own explicit bucket/prefix scope.

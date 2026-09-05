@@ -1,4 +1,5 @@
 import db from "./connection.ts";
+import { InjectedEnvVarError, parseEnvVars } from "../env-crypto.ts";
 
 export type EnvironmentRow = {
   id: number;
@@ -36,7 +37,18 @@ export function insertEnvironment(name: string, envVars: string): EnvironmentRow
   return result;
 }
 
-export function updateEnvironment(id: number, name: string, envVars: string): void {
+export function updateEnvironment(id: number, name: string, envVars: string, options: { injection?: boolean } = {}): void {
+  if (!options.injection) {
+    const previous = getEnvironment(id) ?? getDeletedEnvironment(id);
+    const incoming = parseEnvVars(envVars).entries;
+    for (const entry of parseEnvVars(previous?.env_vars).entries) {
+      if (!entry.injected_by) continue;
+      const matches = incoming.filter((candidate) => candidate.key === entry.key);
+      if (matches.length !== 1 || JSON.stringify(matches[0]) !== JSON.stringify(entry)) {
+        throw new InjectedEnvVarError(`${entry.key} is injected by ${entry.injected_by} and is read-only`);
+      }
+    }
+  }
   db.query("UPDATE environments SET name = ?, env_vars = ? WHERE id = ?").run(name, envVars, id);
 }
 

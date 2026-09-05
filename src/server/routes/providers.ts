@@ -1,3 +1,4 @@
+import { storageConnectionReferences } from "../../shared/object-storage.ts";
 import { corsHeaders } from "../lib/cors.ts";
 import { requireAdmin } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
@@ -161,6 +162,10 @@ export async function handleUpdateProvider(request: Request, providerId: string)
     const name = String(body.name ?? current.name).trim();
     if (!name || name.length > 80) return jsonError("Provider name must be between 1 and 80 characters");
     const config = cleanConfig(current.kind, body.config ?? current.config);
+    if (config.endpoint !== current.config.endpoint || config.region !== current.config.region) {
+      const refs = storageConnectionReferences(current.id);
+      if (refs.length) return jsonError(`Connection is used by ${refs.join(", ")}. Create a new connection and explicitly rebind these destinations first.`, 409);
+    }
     const credentials = await finalCredentials(current.id, current.kind, body.credentials, true);
     await verifyProvider(current.kind, config, credentials);
     for (const [field, value] of Object.entries(credentials)) {
@@ -181,6 +186,8 @@ export async function handleDeleteProvider(request: Request, providerId: string)
     const connections = getProviderConnections();
     const provider = connections.find((candidate) => candidate.id === providerId);
     if (!provider) return jsonError("Provider not found", 404);
+    const refs = storageConnectionReferences(providerId);
+    if (refs.length) return jsonError(`Connection is still used by: ${refs.join(", ")}`, 409);
     const assignments = getProviderAssignments();
     const assignedUses = (Object.entries(assignments) as Array<[ProviderUse, string]>)
       .filter(([, id]) => id === providerId).map(([use]) => use);

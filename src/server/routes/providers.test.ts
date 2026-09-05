@@ -101,3 +101,28 @@ describe("admin provider connections", () => {
     expect(await secretStore.get(providerSecretKey(connection.id, "api_token"))).toBeNull();
   });
 });
+
+
+test("provisioning defaults follow the infrastructure connection", async () => {
+  const response = await handleCreateProvider(req({
+    kind: "hetzner", name: "Compute", credentials: { api_token: "x".repeat(40) },
+  }));
+  expect(response.status).toBe(201);
+  const id = getProviderAssignments().infrastructure;
+  database.saveSetting("default_server_type", "cx22");
+  database.saveSetting("default_location", "fsn1");
+  expect((await handleSaveProviderAssignments(req({ infrastructure: "" }))).status).toBe(200);
+  expect(database.getSettings().default_server_type).toBe("");
+  expect(database.getSettings().default_location).toBe("");
+  expect((await handleSaveProviderAssignments(req({ infrastructure: id }))).status).toBe(200);
+  expect(database.getSettings().default_server_type).toBe("cx22");
+  expect(database.getSettings().default_location).toBe("fsn1");
+  await handleSaveProviderAssignments(req({ infrastructure: "" }));
+  await handleDeleteProvider(req(), id);
+  const replacement = await handleCreateProvider(req({
+    kind: "hetzner", name: "Replacement", credentials: { api_token: "y".repeat(40) },
+  }));
+  expect(replacement.status).toBe(201);
+  expect(database.getSettings().default_server_type).toBe("");
+  expect(database.getSettings().default_location).toBe("");
+});

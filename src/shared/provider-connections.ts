@@ -152,3 +152,15 @@ export function providerSecretKey(connectionId: string, field: string): string {
 export function newProviderConnectionId(kind: ProviderKind): string {
   return `${kind.replace(/[^a-z0-9]+/g, "-")}-${crypto.randomUUID().slice(0, 8)}`;
 }
+
+/** Resolve an explicit connection, or the default for a new selection. */
+export class StorageConnectionError extends Error {}
+export function storageConnection(selector?: string): ProviderConnection | null {
+  if (!selector) return assignedProvider("object_storage");
+  const connections = getProviderConnections().filter(p => p.kind === "s3-compatible");
+  const byId = connections.find(p => p.id === selector);
+  if (byId) return byId;
+  const named = connections.filter(p => p.name === selector);
+  if (named.length !== 1) throw new StorageConnectionError(`Object storage connection not found or ambiguous: ${selector}`);
+  return named[0];
+}

@@ -86,7 +86,7 @@ ocd ops finalize <id> [--status=auto|done|failed]
 ```text
 ocd envs <list|show|create|copy|rename|set|unset|deleted|restore|remove|purge>
 ocd servers
-ocd servers show <name|id>
+ocd servers show <name|id> [--storage]
 ocd servers diagnose <name|id>
 ocd servers create --type=X --location=X
 ocd servers enrollment-key
@@ -100,7 +100,11 @@ ocd delete <app>
 ocd delete stack <name>
 ocd resources <ls|volume|volumes|delete>
 ocd volumes <list|show|audit|ls|cat|delete>
-ocd buckets <list|create|delete>
+ocd buckets <list|create|delete> [--storage=<connection>]
+ocd storage list
+ocd storage grant <app> <bucket> --prefix=path/ --token-file=/private/path
+    [--storage=<connection>] [--methods=GET,HEAD,PUT,DELETE,LIST]
+ocd storage revoke <grant-id>
 ocd ssh
 ocd cp <app|server>:/absolute/path <local-path> [--force] [--server] [--replica=ID]
 ```
@@ -116,3 +120,9 @@ create at any DNS provider.
 Buckets use a separately configured S3 access key, secret key, signing region,
 and HTTPS endpoint. Bucket creation and deletion require browser approval;
 deletion refuses non-empty buckets and never recursively removes objects.
+
+`ocd volumes` lists provider disks; local directories appear in
+`ocd servers show <name|id> --storage` and `ocd app show <app> --storage`.
+Prefer manifest `storage` bindings for app-owned object access. Manual grant
+commands are administrative and write a new mode-0600 token file without
+printing the token. See [Environments and secrets](environments-and-secrets.md).

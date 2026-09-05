@@ -1,8 +1,9 @@
+import { appStorageView } from "../../shared/object-storage.ts";
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission, requireAuthenticated, envScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
-import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars, suspiciousPlaintextKeys } from "../../shared/env-crypto.ts";
+import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars, suspiciousPlaintextKeys, platformEnvVars, resolveAppEnvVars, SECRET_MASK } from "../../shared/env-crypto.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
 
@@ -301,8 +302,22 @@ export async function handleGetEnvironmentApps(request: Request, id: number): Pr
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
-    const apps = db.getAppsByEnvironmentId(id).map((a) => ({
-      id: a.id, name: a.name, status: a.status, domain: a.domain,
+    const apps = await Promise.all(db.getAppsByEnvironmentId(id).map(async (a) => {
+      const resolved = await resolveAppEnvVars(a);
+      const secretKeys = new Set(parseEnvVars(env.env_vars).entries.filter((entry) => entry.secret).map((entry) => entry.key));
+      return {
+        id: a.id, name: a.name, status: a.status, domain: a.domain,
+        storage_bindings: appStorageView(a.id),
+        runtime_env_vars: Object.keys(platformEnvVars(a)).map((key) => ({
+          key,
+          value: secretKeys.has(key) && key !== "OCD_DEPLOY_TARGET" ? SECRET_MASK : resolved[key],
+          secret: secretKeys.has(key) && key !== "OCD_DEPLOY_TARGET",
+          injected_by: "OCD",
+        })).concat(appStorageView(a.id).flatMap(binding => [
+          { key: binding.variables.token, value: SECRET_MASK, secret: true, injected_by: `Object storage · ${binding.name}` },
+          { key: binding.variables.url, value: resolved[binding.variables.url], secret: false, injected_by: `Object storage · ${binding.name}` },
+        ])),
+      };
     }));
     return Response.json(apps, { headers: corsHeaders });
   } catch (error) {

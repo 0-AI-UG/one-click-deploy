@@ -1,3 +1,4 @@
+import { resolveStorageBindings, prepareStorageBindings, saveAppStorage, appStorageEnv, deleteAppStorage } from "../../shared/object-storage.ts";
 import type { DeployRequest, Server } from "../../shared/rpc.ts";
 import dbInstance, * as db from "../../shared/db.ts";
 import { isNotFoundError } from "../../shared/providers/errors.ts";
@@ -565,6 +566,15 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       return result;
     })();
 
+    const storage = resolveStorageBindings(req.storage);
+    try {
+      await prepareStorageBindings(app, storage);
+      saveAppStorage(app.id, storage, true);
+    } catch (error) {
+      deleteAppStorage(app.id);
+      db.deleteApp(app.id);
+      throw error;
+    }
     return {
       appId: app.id,
       replicaId: replica.id,
@@ -716,6 +726,7 @@ const pullAndRunContainer: Step<DeployInput, ArtifactOut> = {
       ? {
           ...platform,
           ...appOut.flatEnvVars,
+          ...await appStorageEnv(appRow!.id),
           OCD_DEPLOY_TARGET: platform.OCD_DEPLOY_TARGET,
         }
       : appOut.flatEnvVars;

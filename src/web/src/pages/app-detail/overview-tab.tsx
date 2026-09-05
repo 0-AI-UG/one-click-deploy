@@ -1,3 +1,5 @@
+import { StorageMounts } from "../../components/storage-mounts.tsx";
+import type { StorageMount } from "../../../../shared/storage-display.ts";
 import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { get } from "../../api/client.ts";
@@ -26,7 +28,7 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
     : `http://${app.name}.ocd.internal`;
   const [migratingId, setMigratingId] = useState<number | null>(null);
   const [availability, setAvailability] = useState<{ uptimePct: number | null; mttrSeconds: number | null; sampleCount: number; current: { running: number; desired: number; distinctHosts: number; distinctLocations: number; meetsTarget: boolean } } | null>(null);
-  const [storage, setStorage] = useState<{ current: { image_size_bytes?: number } | null; rollback: { image_size_bytes?: number } | null; reclaimable_image_bytes_upper_bound: number; caveat: string } | null>(null);
+  const [storage, setStorage] = useState<{ mounts?: StorageMount[]; current: { image_size_bytes?: number } | null; rollback: { image_size_bytes?: number } | null; reclaimable_image_bytes_upper_bound: number; caveat: string } | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -61,6 +63,8 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
 
   return (
     <div className="space-y-4">
+      {storage?.mounts && <StorageMounts mounts={storage.mounts} />}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card className="p-4 space-y-3">
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Configuration</h3>
@@ -101,7 +105,9 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
             <div className="flex justify-between gap-4">
               <span className="text-muted">Volume intent</span>
               <span className="text-fg text-right">
-                {(app.desired_volume_size ?? 0) < 0
+                {String(app.volume_id || "").startsWith("local:")
+                  ? "Server-local directory · shares server disk"
+                  : (app.desired_volume_size ?? 0) < 0
                   ? "legacy · explicit manifest required"
                   : (app.desired_volume_size ?? 0) > 0
                   ? `${app.desired_volume_id ? `adopt ${app.desired_volume_id}` : "managed"} · ${app.desired_volume_size} GB → ${app.desired_volume_path || "/data"}`
@@ -138,6 +144,26 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
           {app.dns_instruction && <DnsInstructionView value={app.dns_instruction} />}
         </Card>
       </div>
+
+      {(app.storage_bindings || []).length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {(app.storage_bindings || []).map(binding => (
+            <Card key={binding.name} className="p-4 space-y-3 min-w-0">
+              <div className="flex items-center justify-between gap-4">
+                <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Object storage · {binding.name}</h3>
+                <span className="font-mono text-[8px] font-bold border border-fg px-1 uppercase shrink-0" title="Injected by OCD. Configure this binding in the app manifest.">OCD managed</span>
+              </div>
+              <div className="space-y-2 text-[10px] font-mono">
+                <div className="flex justify-between gap-4"><span className="text-muted">Connection</span><span className="text-fg text-right break-all">{binding.connection_name}</span></div>
+                <div className="flex justify-between gap-4"><span className="text-muted">Bucket</span><span className="text-fg font-bold text-right break-all">{binding.bucket}</span></div>
+                <div className="flex justify-between gap-4"><span className="text-muted">Prefix</span><span className="text-fg text-right break-all">{binding.prefix || "Bucket root"}</span></div>
+                <div className="flex justify-between gap-4"><span className="text-muted">Permissions</span><span className="text-fg text-right">{binding.permissions.join(", ")}</span></div>
+                <div className="flex justify-between gap-4"><span className="text-muted">Token</span><span className="text-fg text-right break-all" title={binding.variables.token}>{binding.variables.token} · ••••••••</span></div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card className="p-4 space-y-3">

@@ -1,3 +1,4 @@
+import { StorageBindingsSchema } from "./storage-schema.ts";
 import { publicPortRange, type PublicProtocol, type InternalProtocol } from "./db/apps.ts";
 import {
   DeployManifestSchema,
@@ -430,6 +431,7 @@ function fieldValueAt(root: unknown, path: readonly PropertyKey[]): unknown {
 
 
 export function validateDeployRequest(req: {
+  storage?: import("./storage-schema.ts").StorageBindings;
   apply_mode?: "manifest";
   app_name: string;
   domain?: string;
@@ -473,6 +475,10 @@ export function validateDeployRequest(req: {
   cap_add?: string[];
   post_start_command?: string;
 }): ValidationResult<void> {
+  if (req.storage !== undefined) {
+    const result = StorageBindingsSchema.safeParse(req.storage);
+    if (!result.success) return { valid: false, error: `Storage: ${result.error.message}` };
+  }
   const nameResult = validateAppName(req.app_name);
   if (!nameResult.valid) return { valid: false, error: `App name: ${nameResult.error}` };
 

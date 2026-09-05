@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { DATA_DIR } from "./paths.ts";
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [secrets:${context}]`, ...args);
 }
@@ -11,6 +14,13 @@ export const DEFAULT_JWT_SECRET = "ocd-dev-default-secret-change-in-production";
 let _warnedDevSecret = false;
 
 export function getJwtSecret(): string {
+  const restoredKeyPath = path.join(DATA_DIR, "jwt-secret");
+  if (existsSync(restoredKeyPath)) {
+    const restored = readFileSync(restoredKeyPath, "utf8");
+    if (!restored) throw new Error("Restored panel encryption key is empty");
+    if (process.env.JWT_SECRET && process.env.JWT_SECRET !== restored) throw new Error("JWT_SECRET differs from the restored panel key. Remove the override to recover stored credentials.");
+    return restored;
+  }
   const fromEnv = process.env.JWT_SECRET;
   if (fromEnv && fromEnv.length >= 32) return fromEnv;
 

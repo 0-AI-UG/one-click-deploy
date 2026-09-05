@@ -14,7 +14,8 @@
     "test:integration:engine": "RUN_INTEGRATION=1 bun test src/integration/engine-ops.test.ts",
     "test:component:build": "RUN_BUILD_COMPONENT=1 bun test src/integration/build-registry.test.ts",
     "bootstrap": "bun run scripts/bootstrap.ts",
-    "build:cli": "bun run scripts/build-cli.ts"
+    "build:cli": "bun run scripts/build-cli.ts",
+    "restore:panel": "bun run scripts/restore-panel.ts"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",

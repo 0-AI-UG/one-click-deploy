@@ -5,6 +5,7 @@ export type EnvVarRow = {
   key: string;
   value: string;
   secret: boolean;
+  injected_by?: string;
 };
 
 type Props = {
@@ -35,7 +36,7 @@ export function EnvVarEditor({ entries, onChange, readOnly, label }: Props) {
             type="text"
             value={v.key}
             placeholder="KEY"
-            readOnly={readOnly}
+            readOnly={readOnly || !!v.injected_by}
             onChange={(e) => update(i, "key", e.target.value)}
             className={`!w-1/3 ${readOnly ? "opacity-60" : ""}`}
           />
@@ -43,11 +44,16 @@ export function EnvVarEditor({ entries, onChange, readOnly, label }: Props) {
             type={v.secret ? "password" : "text"}
             value={v.value}
             placeholder={v.secret ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" : "value"}
-            readOnly={readOnly}
+            readOnly={readOnly || !!v.injected_by}
             onChange={(e) => update(i, "value", e.target.value)}
             className={readOnly ? "opacity-60" : ""}
           />
-          {!readOnly && (
+          {v.injected_by && (
+            <span className="font-mono text-[9px] text-muted flex-shrink-0" title="Managed automatically; change the source configuration to update this value.">
+              <Lock size={12} className="inline mr-1" />Injected · {v.injected_by}
+            </span>
+          )}
+          {!readOnly && !v.injected_by && (
             <>
               <button
                 type="button"

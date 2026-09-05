@@ -3,6 +3,7 @@ export type EnvVarEntry = {
   value: string;
   secret: boolean;
   updated_at: string;
+  injected_by?: string;
 };
 
 export type DnsInstruction = {
@@ -22,6 +23,7 @@ export type EnvironmentData = {
 };
 
 export type AppData = {
+  storage_bindings?: Array<{ name: string; connection: string; connection_name: string; bucket: string; prefix: string; permissions: string[]; variables: { token: string; url: string } }>;
   id: number;
   name: string;
   domain: string;
@@ -238,6 +240,8 @@ export type ResourcesData = {
   servers: ResourceServer[];
   volumes: ResourceVolume[];
   buckets: ResourceBucket[];
+  storage_connection: string;
+  storage_connections: Array<{ id: string; name: string; endpoint: string; region: string }>;
   s3_configured: boolean;
   s3_region: string;
   s3_error?: string;

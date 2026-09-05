@@ -65,3 +65,36 @@ ocd ops logs <id>
 
 Only use cancel, retry, or finalize after inspecting the operation and with
 explicit user intent.
+
+## Missing provider UI or provider key errors after a panel release
+
+Inspect the running panel image digest and its source commit, provider
+connections, and assignments before asking for credentials again. A release
+built from an older committed tree can omit features present in a custom image
+or uncommitted workspace. Existing encrypted keys may still be intact while the
+older code reads a legacy credential location. Check configured status without
+printing credentials.
+
+The OCD panel repository's `.github/workflows/cd.yml` builds on main pushes and
+releases the resulting digest through `/webhooks/github/panel-release`. This is
+separate from OCD-managed application delivery. Before pushing panel changes,
+ensure the release tree contains the running features and keep a verified panel
+backup and known-good image digest. Verify the served UI/API after deployment.
+A working-tree fix is not live until the running panel and installed CLI contain it.
+
+## Confirmation page does not open
+
+Use the normal CLI mutation command. Its confirmation helper creates a
+resource-bound request, launches the OS browser, waits for approval, and sends
+the confirmed code to the mutation endpoint. A raw API confirmation request
+only returns codes; it does not open the browser. If OS launching fails, open
+the printed URL. Never bypass the server confirmation gate or expose the private
+confirmation token. Volume deletion additionally requires typing the exact ID.
+
+## A local directory was displayed as a paid volume
+
+Current source separates provider Volumes from local directories in app/server
+Storage. Older panel/CLI versions may mix them and show the manifest's requested
+size as capacity. A `local:<server-id>:<name>` identity is server-local storage;
+verify its actual mount and host free space. Changing that display does not
+allocate a provider disk or move data. See [Storage](scaling-storage-and-placement.md#storage).

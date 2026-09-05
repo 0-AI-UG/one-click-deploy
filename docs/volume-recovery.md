@@ -12,7 +12,7 @@ Retention depends on why the volume was detached:
 
 Retained volumes remain visible under **Resources → Volumes**, including their
 provider volume ID, former owner, and purge-after date. They continue to incur
-Hetzner volume charges.
+provider volume charges.
 
 To recover an app volume during the grace period, use the existing
 **attach-existing volume** action and select the recorded provider volume ID.

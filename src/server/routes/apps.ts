@@ -1,5 +1,6 @@
+import { getAppStorage, appStorageView } from "../../shared/object-storage.ts";
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission, requireCliPermission, requireAuthenticated, appScope } from "../lib/permissions.ts";
+import { requireAdmin, requirePermission, requireCliPermission, requireAuthenticated, appScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
@@ -30,6 +31,8 @@ export function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
   return {
     ...safe,
     env_vars: [],
+    storage: getAppStorage(app.id),
+    storage_bindings: appStorageView(app.id),
     auth_enabled: !!auth_password_hash,
     environment_id: app.environment_id ?? null,
     environment_name: envRow?.name ?? null,
@@ -284,6 +287,7 @@ export async function handleDeploy(request: Request): Promise<Response> {
   try {
     const payload = await requireCliPermission(request, "apps.deploy");
     const req = await request.json() as AppDeployRequest;
+    if (req.storage && Object.keys(req.storage).length) await requireAdmin(request);
     if (!req?.app_name || typeof req.app_name !== "string") {
       return Response.json({ ok: false, error: "app_name is required" }, { status: 400, headers: corsHeaders });
     }

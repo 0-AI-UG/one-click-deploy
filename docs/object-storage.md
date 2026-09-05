@@ -63,3 +63,53 @@ and LIST only where application deletion or retention needs them.
 For Hetzner Object Storage, use the location as the signing region and
 `https://<location>.your-objectstorage.com` as the endpoint. Other providers
 must support path-style bucket requests and AWS SigV4 signing.
+
+## Managed app bindings and multiple connections
+
+Named S3 connections can be used simultaneously. The Object Storage page has a
+connection selector; `ocd buckets list --storage=<id-or-name>` and bucket
+create/delete accept the same selector. Omitting it uses the default. Confirmed
+bucket operations are scoped to connection ID plus bucket name.
+
+Declare app-owned access in the manifest:
+
+```json
+{
+  "storage": {
+    "primary": {
+      "connection": "s3-compatible-3206399b",
+      "bucket": "app-uploads",
+      "prefix": "production/",
+      "permissions": ["read", "write", "delete", "list"]
+    }
+  }
+}
+```
+
+Bindings require an existing bucket and administrator authorization for deployment.
+Each app and named binding receives a different encrypted grant, even when they
+share a bucket or prefix. An omitted connection selects the default only for a
+new binding; reconciliation retains an existing binding's connection ID. A changed
+global default does not redirect app traffic.
+
+The `primary` binding injects `OCD_STORAGE_TOKEN` and `OCD_STORAGE_URL` directly
+into the container. Other names use `OCD_<NAME>_STORAGE_TOKEN` and
+`OCD_<NAME>_STORAGE_URL`. These override environment values and bypass shared
+variable projection. The panel displays masked, read-only binding details.
+Keep application driver settings (such as `STORAGE_DRIVER=ocd`) in normal app
+configuration and use the OCD client. No S3 provider credentials reach the app.
+
+Permissions map to GET/HEAD (`read`), PUT (`write`), DELETE (`delete`), and LIST
+(`list`). Increment a binding's `generation` to rotate its token. Preparation
+keeps the previous grant valid; retirement happens only after all replicas attest
+to the desired environment. Removing a binding follows the same retirement rule.
+Deleting an app revokes its managed grants. Standalone manually issued grants
+still require explicit revocation.
+
+Connection deletion and endpoint/region changes are blocked while referenced by
+app bindings, grants, or enabled panel backups. Rebind to another connection
+explicitly; credential rotation can update the existing connection. Bindings do
+not copy objects. Staging must select a separate explicit bucket/prefix scope.
+
+Panel backup configuration pins a connection ID. Each backup records that ID,
+endpoint and region; changing the global default does not affect it.

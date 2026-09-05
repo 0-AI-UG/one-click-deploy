@@ -123,7 +123,7 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
         `Allow creation of one or more billable provider servers as required for ${plan.reason}: ` +
         `${plan.serverType} in ${plan.location}, pool${plan.pools.length === 1 ? "" : "s"} ${plan.pools.join(", ")}.`;
     } else if (action === "create_bucket") {
-      const region = (await getS3Credentials())?.region || "the selected provider";
+      const region = (await getS3Credentials(resourceId.split(":")[0]))?.region || "the selected provider";
       summary = `Create private S3-compatible bucket "${resourceId}" in ${region}. Provider billing may apply.`;
     } else if (action === "delete_bucket") {
       summary = `Delete empty S3-compatible bucket "${resourceId}". OCD will refuse to recursively delete objects or versions.`;

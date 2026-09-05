@@ -1,3 +1,4 @@
+import { storageUsage, type StorageMount } from "../../shared/storage-display.ts";
 import { get, post, resolveApp, type App } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RESET, table } from "../format.ts";
@@ -110,7 +111,7 @@ async function showApp(args: string[]): Promise<void> {
     ["Memory MB", String(app.memory_mb ?? "-")],
     ["CPU cores", String(app.cpu_limit ?? "-")],
     ["Config revision", String(app.config_revision ?? "-")],
-    ["Volume intent", (app.desired_volume_size ?? 0) < 0
+    ["Volume intent", app.volume_id?.startsWith("local:") ? "Server-local directory; shares server disk; no separate storage charge" : (app.desired_volume_size ?? 0) < 0
       ? "legacy; deploy an explicit manifest"
       : (app.desired_volume_size ?? 0) > 0
       ? `${app.desired_volume_id ? `adopt ${app.desired_volume_id}` : "managed"}, ${app.desired_volume_size} GB at ${app.desired_volume_path || "/data"}`
@@ -124,6 +125,7 @@ async function showApp(args: string[]): Promise<void> {
   ]);
   if (parsed.switches.has("storage")) {
     const storage = await get<{
+      mounts?: StorageMount[];
       current: { image_size_bytes: number; archive_size_bytes: number; transfer_size_bytes: number } | null;
       rollback: { image_size_bytes: number; archive_size_bytes: number; transfer_size_bytes: number } | null;
       reclaimable_image_bytes_upper_bound: number;
@@ -132,6 +134,8 @@ async function showApp(args: string[]): Promise<void> {
     const size = (bytes?: number | null) => typeof bytes === "number" && bytes > 0
       ? `${(bytes / 1024 / 1024).toFixed(1)} MiB`
       : "unknown";
+    console.log(`\n${BOLD}Persistent storage${RESET}`);
+    table(["TYPE", "HOST", "PATH", "MOUNT", "USAGE", "BILLING"], (storage.mounts || []).map(m => [m.kind, m.server_name, m.host_path, m.container_path, storageUsage(m.used_bytes), m.kind === "local-directory" ? "Shares server disk; no separate charge" : "Provider volume"]));
     console.log(`\n${BOLD}Image storage${RESET}`);
     table(["Asset", "Expanded", "Compressed archive", "Transferred"], [
       ["Current", size(storage.current?.image_size_bytes), size(storage.current?.archive_size_bytes), size(storage.current?.transfer_size_bytes)],
@@ -334,7 +338,7 @@ async function staging(args: string[]): Promise<void> {
 function usage(): void {
   console.log(`${BOLD}Usage:${RESET} ocd app <command> [args]
 
-  show <app> [--storage]        Show app configuration and optional image storage
+  show <app> [--storage]        Show app configuration and optional persistent and image storage
   deployments <app>            List deployment history
   replicas <app>               List replicas and current resource use
   metrics <app> [--since=SEC]   Current metrics or sampled history

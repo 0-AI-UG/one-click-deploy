@@ -1,0 +1,13 @@
+{
+  "panel_image_ref": "ghcr.io/0-ai-ug/open-cli-deployment@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "domain": "panel.example.com",
+  "default_domain_suffix": "apps.example.com",
+  "app_name": "ocd-panel",
+  "connected_host": {
+    "name": "panel-1",
+    "management_address": "203.0.113.10",
+    "routing_address": "203.0.113.10",
+    "ssh_host_key": "203.0.113.10 ssh-ed25519 AAAA_REPLACE_WITH_VERIFIED_KEY",
+    "ssh_private_key": "/absolute/path/to/id_ed25519"
+  }
+}

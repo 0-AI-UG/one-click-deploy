@@ -1,3 +1,4 @@
+import { appStorageEnv, prepareStorageBindings, resolveStorageBindings, getAppStorage } from "../../shared/object-storage.ts";
 import * as db from "../../shared/db.ts";
 import {
   pullImmutableImageAndRun,
@@ -113,9 +114,11 @@ async function candidateEnvVars(app: AppRow, candidate: DeployRequest | null): P
       : Object.entries(candidate.env_vars).map(([key, value]) => ({ key, value }));
     for (const entry of incoming) values[entry.key] = entry.value;
   }
+  const bindings = resolveStorageBindings(candidate.storage, getAppStorage(app.id));
+  await prepareStorageBindings(app, bindings);
   const projected = projectEnvVars(values, candidate.env_projection);
   const platform = platformEnvVars(effectiveApp);
-  return { ...platform, ...projected, OCD_DEPLOY_TARGET: platform.OCD_DEPLOY_TARGET };
+  return { ...platform, ...projected, ...await appStorageEnv(app.id, bindings), OCD_DEPLOY_TARGET: platform.OCD_DEPLOY_TARGET };
 }
 
 const wakeIfSleeping: Step<RedeployInput, WakeOut> = {

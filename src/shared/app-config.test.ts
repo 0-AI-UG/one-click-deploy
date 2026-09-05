@@ -14,10 +14,10 @@ import { serializeEnvVars } from "./env-crypto.ts";
 
 const IMAGE_REF = `ghcr.io/acme/app@sha256:${"a".repeat(64)}`;
 
-test("manifest reconciliation preserves an explicitly selected storage driver", () => {
-  const app = { name: "storage-app", container_port: 5432, desired_volume_driver: "local-directory" } as unknown as db.AppRow;
-  expect(mergeDeployRequestWithExistingApp(app, {}).volume_driver).toBe("local-directory");
-  expect(mergeDeployRequestWithExistingApp(app, { volume_driver: "hetzner-block" }).volume_driver).toBe("hetzner-block");
+test("manifest reconciliation retains or explicitly selects the storage driver", () => {
+  const app = { name: "storage-app", container_port: 5432, desired_volume_driver: "hetzner-block" } as db.AppRow;
+  expect(mergeDeployRequestWithExistingApp(app, { volume_size: 10 }).volume_driver).toBe("hetzner-block");
+  expect(mergeDeployRequestWithExistingApp(app, { volume_size: 10, volume_driver: "local-directory" }).volume_driver).toBe("local-directory");
 });
 
 describe("classifyAppConfigChanges", () => {

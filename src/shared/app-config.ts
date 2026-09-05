@@ -1,3 +1,4 @@
+import { getAppStorage, resolveStorageBindings, saveAppStorage, prepareStorageBindings } from "./object-storage.ts";
 import * as db from "./db.ts";
 import type { AppRow } from "./db/apps.ts";
 import type { DeployRequest } from "./rpc.ts";
@@ -16,7 +17,7 @@ export type AppReconcileMode = "control" | "runtime" | "artifact";
 const ARTIFACT_CONFIG_FIELDS = new Set(["image_ref"]);
 
 const RUNTIME_CONFIG_FIELDS = new Set([
-  "container_port", "environment_id", "env_projection", "memory_mb", "cpu_limit",
+  "storage", "container_port", "environment_id", "env_projection", "memory_mb", "cpu_limit",
   "health_check", "health_check_mode", "health_check_command", "health_check_file",
   "health_check_max_age_seconds", "health_check_expected_statuses", "internal_protocol",
   "extra_volumes", "desired_volume_id", "desired_volume_size", "desired_volume_path", "desired_volume_driver",
@@ -154,6 +155,7 @@ export function mergeDeployRequestWithExistingApp(
     image_ref: supplied.image_ref ?? "",
     container_port: supplied.container_port,
     env_vars: supplied.env_vars,
+    storage: resolveStorageBindings(supplied.storage, getAppStorage(app.id)),
     env_projection: supplied.env_projection ?? null,
     public: publicApp,
     memory_mb: supplied.memory_mb ?? 0,
@@ -197,7 +199,7 @@ export function mergeDeployRequestWithExistingApp(
     target: supplied.target ?? app.target,
     target_of: supplied.target_of ?? app.target_of ?? undefined,
     volume_id: supplied.volume_id ?? "",
-    volume_driver: supplied.volume_driver ?? (app as db.AppRow & { desired_volume_driver?: string }).desired_volume_driver,
+    volume_driver: supplied.volume_driver ?? app.desired_volume_driver ?? undefined,
     volume_size: supplied.volume_size ?? 0,
     volume_path: supplied.volume_path ?? "/data",
     manifest_path: supplied.manifest_path,
@@ -217,6 +219,7 @@ function normalizedSpec(req: DeployRequest) {
     container_port: req.container_port,
     environment_id: req.environment_id,
     env_projection: req.env_projection ?? null,
+    storage: req.storage ?? {},
     public: req.public ?? true,
     memory_mb: req.memory_mb ?? 0,
     cpu_limit: req.cpu_limit ?? 0,
@@ -265,6 +268,7 @@ function comparableApp(app: AppRow) {
     container_port: app.container_port,
     environment_id: app.environment_id,
     env_projection: db.parseAppEnvProjection(app),
+    storage: getAppStorage(app.id),
     public: !!app.public,
     memory_mb: app.memory_mb ?? 0,
     cpu_limit: app.cpu_limit ?? 0,
@@ -324,6 +328,7 @@ export function deployRequestFromApp(app: AppRow): DeployRequest {
     container_port: app.container_port,
     environment_id: app.environment_id,
     env_projection: db.parseAppEnvProjection(app),
+    storage: getAppStorage(app.id),
     public: current.public,
     memory_mb: current.memory_mb,
     cpu_limit: current.cpu_limit,
@@ -437,7 +442,9 @@ export async function applyAppConfig(
   const desired = normalizedSpec(effective);
   const changes = diffAppConfig(app, effective);
   const changed = new Set(changes.map((c) => c.field));
+  await prepareStorageBindings(app, desired.storage);
   await applyEnvironment(app, effective);
+  if (changed.has("storage")) saveAppStorage(app.id, desired.storage);
   if ([
     "image_ref", "health_check_mode", "health_check_command",
     "health_check_file", "health_check_max_age_seconds", "health_check_expected_statuses",

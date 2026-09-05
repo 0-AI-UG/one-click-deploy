@@ -1,6 +1,7 @@
+import { getStorageGrants, saveStorageGrants } from "../../shared/object-storage.ts";
 import { createHash, randomBytes } from "node:crypto";
 import * as db from "../../shared/db.ts";
-import { assignedProvider } from "../../shared/provider-connections.ts";
+import { storageConnection } from "../../shared/provider-connections.ts";
 import { getS3Credentials, listBuckets, validateBucketName } from "../../engine/object-storage/s3.ts";
 import { presignObject, validObjectKey } from "../../engine/object-storage/presign.ts";
 import { requireAdmin } from "../lib/permissions.ts";
@@ -11,7 +12,7 @@ type Grant = { id: string; app: string; providerId: string; endpoint: string; re
   methods: Method[]; tokenHash: string; createdAt: string };
 const SETTING = "object_storage_grants";
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
-const grants = (): Grant[] => JSON.parse(db.getSettings()[SETTING] || "[]");
+const grants = getStorageGrants;
 const reply = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 
 export function authorizeObject(grant: Pick<Grant, "prefix" | "methods">, body: Record<string, unknown>): {
@@ -38,7 +39,7 @@ export async function handleStorageAuthorize(request: Request): Promise<Response
   if (!token) return reply({ error: "Unauthorized" }, 401);
   const grant = grants().find(item => item.tokenHash === tokenHash(token));
   if (!grant) return reply({ error: "Unauthorized" }, 401);
-  const provider = assignedProvider("object_storage");
+  const provider = storageConnection(grant.providerId);
   if (provider?.id !== grant.providerId || provider.config.endpoint !== grant.endpoint || provider.config.region !== grant.region) return reply({ error: "Storage provider changed; rebind app" }, 409);
   try {
     if (Number(request.headers.get("content-length") ?? 0) > 4096) return reply({ error: "Request too large" }, 413);
@@ -46,9 +47,9 @@ export async function handleStorageAuthorize(request: Request): Promise<Response
     if (raw.length > 4096) return reply({ error: "Request too large" }, 413);
     const body = JSON.parse(raw);
     if (!body || typeof body !== "object" || Array.isArray(body)) return reply({ error: "Invalid request" }, 400);
-    const credentials = await getS3Credentials();
+    const credentials = await getS3Credentials(grant.providerId);
     if (!credentials) return reply({ error: "Storage unavailable" }, 503);
-    if (assignedProvider("object_storage")?.id !== grant.providerId || credentials.endpoint !== grant.endpoint || credentials.region !== grant.region) return reply({ error: "Storage provider changed; rebind app" }, 409);
+    if (storageConnection(grant.providerId)?.id !== grant.providerId || credentials.endpoint !== grant.endpoint || credentials.region !== grant.region) return reply({ error: "Storage provider changed; rebind app" }, 409);
     if (body.method === "LIST") {
       if (!grant.methods.includes("LIST") || (body.prefix !== "" && !validObjectKey(body.prefix)) ||
           (body.continuationToken !== undefined && typeof body.continuationToken !== "string")) return reply({ error: "Invalid list request" }, 400);
@@ -66,12 +67,13 @@ export async function handleStorageAuthorize(request: Request): Promise<Response
 export async function handleStorageGrants(request: Request): Promise<Response> {
   try {
     await requireAdmin(request);
-    if (request.method === "GET") return reply(grants().map(({ tokenHash: _, ...grant }) => grant));
+    if (request.method === "GET") return reply(grants().map(({ tokenHash: _, encrypted_value: _encrypted, iv: _iv, ...grant }) => grant));
     const body = await request.json() as Record<string, unknown>;
     if (request.method === "DELETE") {
       const existing = grants();
       if (typeof body.id !== "string") return reply({ error: "Grant id required" }, 400);
-      db.saveSetting(SETTING, JSON.stringify(existing.filter(grant => grant.id !== body.id)));
+      if (existing.some(grant => grant.id === body.id && grant.appId != null)) return reply({ error: "Managed grant: remove or rotate its app binding instead" }, 409);
+      saveStorageGrants(existing.filter(grant => grant.id !== body.id));
       return reply({ ok: true });
     }
     // Grants can be prepared before the first deployment. Their lifecycle is
@@ -84,8 +86,8 @@ export async function handleStorageGrants(request: Request): Promise<Response> {
         !Array.isArray(methods) || !methods.length || methods.some(method => !["GET", "HEAD", "PUT", "DELETE", "LIST"].includes(method))) {
       return reply({ error: "Valid app, bucket, prefix ending in /, and methods are required" }, 400);
     }
-    const provider = assignedProvider("object_storage");
-    const credentials = await getS3Credentials();
+    const provider = storageConnection(typeof body.storage === "string" ? body.storage : undefined);
+    const credentials = provider ? await getS3Credentials(provider.id) : null;
     if (!provider || !credentials) return reply({ error: "Object storage is not configured" }, 409);
     if (!(await listBuckets(credentials)).some(item => item.name === bucket.value)) return reply({ error: "Bucket not found" }, 404);
     const token = `ocds_${randomBytes(32).toString("hex")}`;

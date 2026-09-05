@@ -53,6 +53,7 @@ export function buildStackAppSpec(
   if (manifest.build) spec.build = manifest.build;
   if (manifest.image) spec.image_ref = manifest.image;
   spec.delivery_source = manifest.build ? "build" : "image";
+  if (manifest.storage) spec.storage = manifest.storage;
   if (manifest.exports) spec.exports = manifest.exports;
   if (manifest.environment !== undefined) spec.environment = manifest.environment;
 

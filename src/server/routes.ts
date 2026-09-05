@@ -1,3 +1,5 @@
+import { handleGetProtection, handleSaveProtection, handleRecoveryKey, handleBackupNow, handleTestEmail, handleResumeRecovery } from "./routes/panel-protection.ts";
+import { recoveryPending } from "../engine/panel-protection/recovery-state.ts";
 import { handleStorageAuthorize, handleStorageGrants } from "./routes/storage-access.ts";
 import { handleSetupStatus, handleSetupComplete } from "./routes/setup.ts";
 import { handleLogin, handleMe, handleUpdateMe } from "./routes/auth.ts";
@@ -331,6 +333,11 @@ export const apiRoutes = {
   // no browser wake page or token dance. Explicit wake actions use the
   // dedicated operational endpoint and never mutate desired app config.)
 
+  "/api/admin/protection": { GET: handleGetProtection, PUT: handleSaveProtection },
+  "/api/admin/protection/recovery-key": { POST: handleRecoveryKey },
+  "/api/admin/protection/backup": { POST: handleBackupNow },
+  "/api/admin/protection/test-email": { POST: handleTestEmail },
+  "/api/admin/protection/resume": { POST: handleResumeRecovery },
   // --- Admin: Settings ---
   "/api/admin/settings": {
     GET: (req: Request) => handleGetSettings(req),
@@ -493,3 +500,16 @@ export const apiRoutes = {
 
   // --- Volumes ---
 };
+
+// Restored state may be older than the fleet. Block mutations until an admin
+// verifies it, while permitting login and recovery itself.
+for (const [route, handlers] of Object.entries(apiRoutes)) {
+  if (route.startsWith("/api/auth/") || route.startsWith("/api/webauthn/") || route.startsWith("/api/admin/protection")) continue;
+  const methods = handlers as Record<string, (request: Request) => Response | Promise<Response>>;
+  for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+    const handler = methods[method];
+    if (handler) methods[method] = request => recoveryPending()
+      ? Response.json({ error: "Panel recovery is paused. Open Admin → Panel to verify and resume." }, { status: 409 })
+      : handler(request);
+  }
+}

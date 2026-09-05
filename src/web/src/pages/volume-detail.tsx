@@ -7,7 +7,8 @@ import { Database, Folder, FileText, ArrowLeft, ChevronRight, RefreshCw, FileWar
 type VolumeDetail = {
   id: string;
   name: string;
-  size: number;
+  size: number | null;
+  storage_kind?: string;
   location: string;
   server_name: string | null;
   server_id: number | null;
@@ -124,11 +125,11 @@ export function VolumeDetailPage({ volumeId }: { volumeId: string }) {
 
       <Card className="p-4">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <Info label="Size" value={`${detail.size} GB`} />
+          <Info label="Size" value={`${detail.storage_kind === "local-directory" ? "Shares server disk · no quota" : `${detail.size} GB`}`} />
           <Info label="Location" value={detail.location} />
           <Info label="Server" value={detail.server_name || "—"} />
           <Info label="App" value={detail.app_name || "—"} accent={!!detail.app_name} />
-          <Info label="€/mo" value={detail.monthly_eur != null ? `€${detail.monthly_eur.toFixed(2)}` : "—"} />
+          <Info label="€/mo" value={detail.storage_kind === "local-directory" ? "No separate storage charge" : detail.monthly_eur != null ? `€${detail.monthly_eur.toFixed(2)}` : "—"} />
         </div>
         {detail.host_path && (
           <div className="mt-3 pt-3 border-t border-fg/15 font-mono text-[10px] text-fg-dim">

@@ -1,3 +1,5 @@
+import { StorageMounts } from "../components/storage-mounts.tsx";
+import type { StorageMount } from "../../../shared/storage-display.ts";
 import { useState, useEffect } from "react";
 import { get } from "../api/client.ts";
 import { runCliAction } from "../api/cli-actions.ts";
@@ -50,6 +52,7 @@ type HostProbe = {
 };
 
 type ServerDetail = {
+  local_storage?: StorageMount[];
   id: number;
   name: string;
   provider_id: string;
@@ -419,6 +422,8 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
           </div>
         )}
       </Card>
+
+      <StorageMounts mounts={detail.local_storage || []} title="Server storage" />
 
       <Card className="p-4">
         <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-2">

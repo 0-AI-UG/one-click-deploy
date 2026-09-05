@@ -101,6 +101,7 @@ export type EnvVarEntry = {
 };
 
 export type DeployRequest = {
+  storage?: import("./storage-schema.ts").StorageBindings;
   /** Complete manifest reconciliation. Browser/API patches are not supported. */
   apply_mode?: "manifest";
   app_name: string;

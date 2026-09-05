@@ -8,19 +8,19 @@ infrastructure provisioner, not an account or runtime requirement.
 - A **managed Hetzner** server is created and owned by OCD. It supports OCD
   provider volumes, network/firewall reconciliation, and
   provider-side deletion.
-- A **connected** server is owned by the operator. OCD runs stateless app
-  containers on it, but never deletes the VPS and does not attach provider
-  volumes there. Removing it from OCD only
-  disconnects its database record.
+- A **connected** server is owned by the operator. OCD runs app containers and
+  can create persistent server-local directories there, but never deletes the
+  VPS or attaches provider volumes. Removing it from OCD only disconnects its
+  database record and is refused while local volumes remain tracked.
 
 Direct SSH remains available. OCD's enrollment key is the platform key used
 for orchestration; it does not replace or remove operator-owned SSH keys.
 
 ## Connect an existing VPS
 
-The current enrollment contract is deliberately narrow: Linux with Docker,
-an IPv4 management address, an RFC1918 private IPv4 address reachable from the
-panel, and root SSH on port 22.
+The current enrollment contract is deliberately narrow: Linux with Docker, an
+IPv4 management address, a routing IPv4 address reachable from the panel, and
+root SSH on port 22.
 
 1. Print OCD's public key and add it to `/root/.ssh/authorized_keys` on the VPS:
 
@@ -43,13 +43,13 @@ panel, and root SSH on port 22.
    ocd servers connect \
      --name=app-1 \
      --address=203.0.113.10 \
-     --private-address=10.0.0.11 \
+     --routing-address=10.0.0.11 \
      --host-key='203.0.113.10 ssh-ed25519 AAAA...'
    ```
 
 OCD pins the supplied host key, verifies key-based SSH and Docker, confirms the
-host owns the claimed private address, and proves the panel can reach the same
-verified host through that private address. Enrollment fails closed if any
+host owns the claimed routing address, and proves the panel can reach the same
+verified host through that address. Enrollment fails closed if any
 check fails.
 
 Inspect ownership with `ocd servers` or `ocd servers show <name|id>`. Use
@@ -58,10 +58,19 @@ connected host; both remain browser-confirmed operations.
 
 ## Optional Hetzner provisioning
 
-An administrator may add a Hetzner Cloud API token in the panel's
-**Optional Infrastructure Provider** settings. Until then, provider server
-types are empty and requests that need new managed capacity fail with guidance
-to configure Hetzner or connect an existing host.
+In **Admin → Providers**, add a Hetzner connection and assign it to
+**Infrastructure**. Provider connections and their assignments are separate;
+credentials remain in the encrypted secret store. S3-compatible connections
+are configured independently and can be assigned as the object-storage default.
+Until compatible infrastructure is configured, requests for new managed capacity
+fail with guidance to configure a provider or connect an existing host.
+
+Named object-storage connections can coexist. Select one by ID or unique name
+with `--storage=<connection>` for bucket commands and manual storage grants.
+Existing managed app bindings and panel backups pin their connection ID;
+changing the global default does not redirect them. Endpoint/region changes or
+deletion are blocked while a connection is referenced; rotate credentials on
+the existing connection or explicitly rebind dependents.
 
 DNS stays operator-owned regardless of infrastructure provider. Configure an
 optional default domain suffix, then create the A/AAAA records OCD displays at

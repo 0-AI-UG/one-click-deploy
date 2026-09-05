@@ -1,3 +1,4 @@
+import { storageUsage, type StorageMount } from "../../shared/storage-display.ts";
 import { del, get, patch, post } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { webConfirm, withWebConfirmation } from "../confirm.ts";
@@ -37,6 +38,7 @@ interface HostProbe {
 }
 
 interface ServerDetail extends Server {
+  local_storage?: StorageMount[];
   status: string;
   ipv6: string;
   routing_address: string;
@@ -118,7 +120,7 @@ function fmtDuration(value: number | null): string {
   return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
-async function showServer(ref: string, diagnosticsOnly = false): Promise<void> {
+async function showServer(ref: string, diagnosticsOnly = false, storage = false): Promise<void> {
   const server = await resolveServer(ref);
   const detail = await get<ServerDetail>(`/api/resources/servers/${server.id}`);
   const host = detail.host;
@@ -127,6 +129,12 @@ async function showServer(ref: string, diagnosticsOnly = false): Promise<void> {
   console.log(`${DIM}Network:${RESET} ${detail.ipv4}${detail.routing_address ? ` / ${detail.routing_address}` : ""}`);
   console.log(`${DIM}Usage:${RESET} CPU ${fmtPct(detail.cpu_percent)}  memory ${fmtPct(detail.memory_percent)}  disk ${detail.disk_free_gb ?? "-"}/${detail.disk_total_gb ?? "-"} GB free`);
   console.log(`${DIM}Cost:${RESET} ${detail.monthly_eur == null ? "-" : `${detail.currency} ${detail.monthly_eur.toFixed(2)}/month`}`);
+
+  if (storage) {
+    console.log(`\n${BOLD}Server-local storage — shares server disk; no separate storage charge${RESET}`);
+    table(["APP", "STATE", "HOST PATH", "MOUNT", "USAGE"], (detail.local_storage || []).map(m => [m.app_name, m.state, m.host_path, m.container_path || "-", storageUsage(m.used_bytes)]));
+    return;
+  }
 
   console.log(`\n${BOLD}Host diagnostics${RESET}`);
   if (host.error) console.log(`${RED}${host.error}${RESET}`);
@@ -288,7 +296,8 @@ export async function servers(args: string[] = []): Promise<void> {
     case "show":
     case "detail":
       if (!rest[0]) throw new Error("Usage: ocd servers show <name|id>");
-      return showServer(rest[0]);
+      if (rest.slice(1).some(arg => arg !== "--storage")) throw new Error("Usage: ocd servers show <name|id> [--storage]");
+      return showServer(rest[0], false, rest.includes("--storage"));
     case "diagnose":
     case "diagnostics":
       if (!rest[0]) throw new Error("Usage: ocd servers diagnose <name|id>");

@@ -58,7 +58,40 @@ review deletion audit records, or permanently delete
 an unused volume. The browser shows manifest intent and observed attachment as
 separate read-only state; it has no volume controls.
 
-Managed provider hosts use their compatible block-storage driver. Externally
-connected hosts use persistent server-local directories under
-`/var/lib/ocd/volumes`. Server-local volumes and explicit host mounts cannot be
-migrated to another server; placement and migration fail before mutation.
+The default driver depends on server ownership and the assigned infrastructure
+provider. A compatible managed provider host prefers provider block storage;
+otherwise OCD selects server-local storage. Inspect the actual driver and mount
+instead of inferring it from the server's location or a manifest size.
+Server-local directories live under `/var/lib/ocd/volumes`; they survive
+container replacement but share the host disk, have no separate storage charge,
+and have no reserved capacity or enforced quota. Changing their configured size
+does not allocate disk. They and explicit host mounts cannot be migrated to
+another server through replica migration.
+
+### Inventory and disk usage
+
+- Infrastructure → Volumes and `ocd volumes` list provider block volumes only,
+  with capacity, attachment and estimated provider cost. A successful provider
+  listing excludes stale records for disks that no longer exist.
+- App → Storage and `ocd app show <app> --storage` show persistent mounts and
+  measured usage; the CLI also shows image storage.
+- Server → Storage and `ocd servers show <name|id> --storage` show server-local
+  directories, including retained directories, alongside the server's disk metrics.
+
+Local entries show host, path, usage, and “shares server disk · no separate
+storage charge”. Usage is cached for up to one minute; failed inspection shows
+unavailable, not zero. The requested manifest size is not displayed as local
+capacity. Inspect server free space because images and other workloads share it.
+
+### PostgreSQL placement
+
+Verify `SHOW data_directory` and its mount after deploying or consolidating a
+database. A host directory is persistent across containers but does not provide
+an independently detachable provider disk. Preserve the requested storage type
+when migrating; choosing a separate provider volume requires a compatible driver
+and confirmation of the actual provider attachment.
+
+OCD caps apps with a primary volume at one replica. Raising `replicas` does not
+configure PostgreSQL replication. Database replication needs separate data
+stores and database-aware orchestration; introduce it when availability or read
+load requirements justify the additional operations.

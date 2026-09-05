@@ -9,7 +9,7 @@ import { PermissionGate } from "../components/permission-gate.tsx";
 import { Layers, Plus, Trash2, Copy, ChevronDown, ChevronRight, Key } from "lucide-react";
 import type { EnvironmentData } from "../types.ts";
 
-type AttachedApp = { id: number; name: string; status: string; domain: string };
+type AttachedApp = { id: number; name: string; status: string; domain: string; runtime_env_vars?: EnvVarRow[] };
 export function EnvironmentsPage() {
   const [environments, setEnvironments] = useState<EnvironmentData[]>([]);
   const [deletedEnvironments, setDeletedEnvironments] = useState<EnvironmentData[]>([]);
@@ -68,7 +68,7 @@ export function EnvironmentsPage() {
     } else {
       setExpanded(env.id);
       setEditName(env.name);
-      setEditVars(env.env_vars.map((e) => ({ key: e.key, value: e.value, secret: e.secret })));
+      setEditVars(env.env_vars.map((e) => ({ key: e.key, value: e.value, secret: e.secret, injected_by: e.injected_by })));
       setRollout("restart");
     }
   };
@@ -195,6 +195,13 @@ export function EnvironmentsPage() {
           }
         >
           <EnvVarEditor entries={editVars} onChange={setEditVars} />
+          {typeof id === "number" && (attachedApps[id] || []).map((app) => (
+            <details key={app.id} className="mt-3">
+              <summary className="font-mono text-[10px] text-muted cursor-pointer">Injected at runtime · {app.name}</summary>
+              <p className="font-mono text-[10px] text-muted mt-2">Provided per app by OCD. These values are not stored in this shared environment.</p>
+              <EnvVarEditor entries={app.runtime_env_vars || []} onChange={() => {}} readOnly />
+            </details>
+          ))}
         </PermissionGate>
         {typeof id === "number" && (
           <div className="grid grid-cols-[120px_1fr] items-center gap-2">

@@ -3,6 +3,12 @@ import { corsHeaders } from "./cors.ts";
 export function handleError(error: unknown): Response {
   if (error instanceof Error) {
     const name = error.constructor.name;
+    if (name === "StorageConnectionError") {
+      return Response.json({ error: error.message }, { status: 400, headers: corsHeaders });
+    }
+    if (name === "InjectedEnvVarError") {
+      return Response.json({ error: error.message }, { status: 409, headers: corsHeaders });
+    }
     if (name === "AuthError") {
       return Response.json({ error: error.message }, { status: 401, headers: corsHeaders });
     }

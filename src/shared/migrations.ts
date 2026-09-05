@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { initializeProtectionSchema } from "./db/protection-schema.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [migrations:${context}]`, ...args);
@@ -2640,6 +2641,7 @@ export const migrations: Migration[] = [
           AND last_manifest_path IS NOT NULL`);
     },
   },
+  { version: 115, description: "Panel backups and email incidents", up: initializeProtectionSchema },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

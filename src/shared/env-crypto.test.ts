@@ -5,6 +5,7 @@ import { describe, test, expect } from "bun:test";
 import * as db from "./db.ts";
 import {
   isSuspiciousSecretKey,
+  maskEnvVarsForResponse,
   mergeEnvVarUpdate,
   parseEnvVars,
   platformEnvVars,
@@ -170,5 +171,33 @@ describe("resolveAppEnvVars platform injection", () => {
 
     expect(vars.SHARED).toBeUndefined();
     expect(vars.OCD_INTERNAL_URL).toBe(`http://${app.name}.ocd.internal`);
+  });
+});
+
+
+describe("injected environment ownership", () => {
+  test("allows unchanged managed secrets while rejecting edits, deletion and duplicate keys", async () => {
+    const stored = await processIncomingEnvVars([{ key: "DB_DSN", value: "private", secret: true }]);
+    stored.entries[0].injected_by = "database";
+    const response = maskEnvVarsForResponse(stored)[0];
+    expect(response.injected_by).toBe("database");
+    expect(response.value).toBe("••••••••");
+    expect(response.encrypted_value).toBeUndefined();
+    expect(response.iv).toBeUndefined();
+    const row = { key: "DB_DSN", value: "••••••••", secret: true };
+    expect((await mergeEnvVarUpdate(stored, [row])).entries).toEqual(stored.entries);
+    for (const input of [[], [row, row], [{ ...row, value: "changed" }], [{ ...row, secret: false }]]) {
+      await expect(mergeEnvVarUpdate(stored, input)).rejects.toThrow("injected");
+    }
+  });
+
+  test("all environment writers protect injected entries; the injector can refresh them", () => {
+    const entry = { key: "API_URL", value: "http://api.ocd.internal", secret: false, updated_at: "now", injected_by: "api" };
+    const env = db.insertEnvironment(`managed-${randomSuffix()}`, serializeEnvVars([entry]));
+    db.updateEnvironment(env.id, env.name, serializeEnvVars([entry, { key: "MODE", value: "debug", secret: false, updated_at: "now" }]));
+    expect(() => db.updateEnvironment(env.id, env.name, serializeEnvVars([]))).toThrow("read-only");
+    expect(() => db.updateEnvironment(env.id, env.name, serializeEnvVars([{ ...entry, value: "override" }]))).toThrow("read-only");
+    db.updateEnvironment(env.id, env.name, serializeEnvVars([{ ...entry, value: "http://new.ocd.internal" }]), { injection: true });
+    expect(parseEnvVars(db.getEnvironment(env.id)!.env_vars).entries[0].value).toBe("http://new.ocd.internal");
   });
 });

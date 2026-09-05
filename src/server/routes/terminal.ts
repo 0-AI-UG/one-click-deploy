@@ -1,3 +1,4 @@
+import { recoveryPending } from "../../engine/panel-protection/recovery-state.ts";
 import { jwtVerify } from "jose";
 import * as db from "../../shared/db.ts";
 import { spawnSshPty, type PtySession } from "../../shared/remote/index.ts";
@@ -73,6 +74,7 @@ export async function tryTerminalUpgrade(req: Request, server: Bun.Server<Termin
   const url = new URL(req.url);
   if (url.pathname !== "/api/terminal/ws") return "not-matched";
 
+  if (recoveryPending()) return new Response("Panel recovery is paused", { status: 409 });
   const auth = await authFromQuery(req);
   if (!auth) return new Response("unauthorized", { status: 401 });
 
